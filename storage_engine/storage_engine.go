@@ -18,9 +18,8 @@ type Engine interface {
 
 type KVStorage struct { 
 	Mu sync.RWMutex
-	MemTable map[string][]byte
+	MemTable SkipList
 	WALFile *os.File
-
 }
 
 func (s * KVStorage) WriteToWAL(Op uint8, Key, Value[]byte) error { 
@@ -76,8 +75,11 @@ func (s * KVStorage) Put (Key,Value []byte) error {
 	}
 
 	// write to memtable
-	s.MemTable[string(Key)] = Value
-
+	err = s.MemTable.Insert(Key, Value)
+	if err != nil{
+		fmt.Println("unable to insert key")
+		return nil
+	}
 
 	return nil 
 }
@@ -91,9 +93,10 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 	}
 	
 	
-	val, ok:= s.MemTable[string(Key)] 
-	if ok { 
-		return string(val), nil
+	_, node := s.MemTable.Get(Key)
+	
+	if node != nil  { 
+		return string(node.Value), nil
 	}else{
 		// read from disk 
 		return "123", nil

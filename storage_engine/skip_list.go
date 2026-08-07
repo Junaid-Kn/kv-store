@@ -1,74 +1,102 @@
 package main 
 
-import ("math/rand/v2")
+import ("math/rand/v2"
+		"fmt"
+		"bytes"
+	)
 
 type SkipList struct{
 	HeadNode *SkipListNode
 	MaxHeight uint8
+	CurrentLevel uint8 // current highest level 
 }
 
 type SkipListNode struct{
 	Key []byte
 	Value []byte
-
+	Level uint8
 	// Pointer to the next node
 	NextNode *SkipListNode
 	DownNode *SkipListNode
 }
 
-func (sl *SkipList) Get(Key[]byte) ([]SkipListNode, *SkipListNode){
-	update := make([]SkipListNode{}, curr.MaxHeight)
+func (sl *SkipList) Get(Key []byte) ([]*SkipListNode, *SkipListNode) {
+
+	update := make([]*SkipListNode, sl.MaxHeight)
+
 	curr := sl.HeadNode
-	currHeight = curr.MaxHeight
-	for curr.DownNode != nil || curr.Key == Key {
-		
-		for key < curr.NextNode.Key && curr.DownNode != nil{
-			curr = curr.DownNode
-			currHeight -= 1 
-		}
-		if key >= curr.NextNode.Key{
-			
-			curr = curr.NextNode 	
-			update[currHeight] = curr
+	currHeight := sl.CurrentLevel
 
-		}
-	}
-	if curr.Key == Key{
-		return nil, nil
-	}
-	return update, curr
+	for curr != nil {
 
+		for curr.NextNode != nil &&
+			bytes.Compare(Key, curr.NextNode.Key) >= 0 {
+			curr = curr.NextNode
+		}
+
+		// If we found the key
+		if bytes.Equal(curr.Key, Key) {
+			return update, curr
+		}
+
+		update[currHeight] = curr
+
+		curr = curr.DownNode
+		currHeight--
+	}
+
+	return update, nil
 }
 
-func (sl *SkipList) Insert(Key, Value []byte) error { 
-	
-	updateList, keyNode = sl.Get(Key)
-	if keyNode != nil{
+
+func (sl *SkipList) Insert(Key, Value []byte) error {
+
+	updateList, keyNode := sl.Get(Key)
+
+	if keyNode != nil {
 		fmt.Println("Key exists, abort")
-		return nil 
+		return nil
 	}
 
-	skipListNode = new(SkipListNode)
+	// create bottom level node
+	skipListNode := new(SkipListNode)
+
 	skipListNode.Key = Key
 	skipListNode.Value = Value
-	keyNode.NextNode = skipListNode
+	skipListNode.Level = 0
 
-	curr = skipListNode
+	skipListNode.NextNode = updateList[0].NextNode
+	updateList[0].NextNode = skipListNode
+
+	curr := skipListNode
 	idx := 1
-	for coinFlip() == "Heads"{
-		newSkipListNode = new(SkipListNode)
+
+
+	for coinFlip() == "Heads" && idx < sl.MaxHeight {
+		newSkipListNode := new(SkipListNode)
 		newSkipListNode.Key = Key
 		newSkipListNode.Value = Value
+		newSkipListNode.Level = uint8(idx)
 
-		curr.DownNode = newSkipListNode
-		curr = curr.DownNode
+		newSkipListNode.NextNode = updateList[idx].NextNode
+		updateList[idx].NextNode = newSkipListNode
+
+		newSkipListNode.DownNode = curr
+
+		curr = newSkipListNode
+
+		idx++
 	}
 
-	//update the connections of all the previous nodes 
+
+	// update current height if this node created a new level
+	if idx-1 > sl.CurrentLevel {
+		sl.CurrentLevel = idx-1
+	}
+
 
 	return nil
-
-} 
+}
 
 //private function
 func coinFlip() string{
@@ -80,5 +108,6 @@ func coinFlip() string{
 
 
 func (sl *SkipList) Delete(Key []byte) error {
+	
 	return nil 
 }
