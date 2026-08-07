@@ -1,22 +1,20 @@
 package main
 
-import ("fmt")
+import (
+	// "bytes"
+	"fmt"
+)
 
 func main() {
 
-	s := new(KVStorage)
+	sl := NewSkipList(16)
 
-	key := []byte("key2")
-	val := []byte("1230490223")
-    err := s.WriteToWAL(1, key, val)
-	if err != nil{
-		return
-	}
-	length, recovered := RecoverFromWAL("WAL.bin")
-	// fmt.Println(w)
-	fmt.Println(length)
-	fmt.Println(recovered)
-	// fmt.Println(string(recovered.Key))
-	// fmt.Println(LoadCounter("counter.bin"))
-	
+	sl.Insert([]byte("key1"), []byte("value1"))
+	sl.Insert([]byte("key2"), []byte("value2"))
+	sl.Insert([]byte("key3"), []byte("value3"))
+
+	_, node := sl.Get([]byte("key2"))
+
+	fmt.Println(string(node.Key))
+	fmt.Println(string(node.Value))
 }

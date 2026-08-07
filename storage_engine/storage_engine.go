@@ -104,4 +104,25 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 
 }
 
+func NewSkipList(maxHeight int) *SkipList {
+
+	var down *SkipListNode
+
+	for i := 0; i < maxHeight; i++ {
+
+		head := &SkipListNode{
+			Key:   []byte{},
+			Level: i,
+		}
+
+		head.DownNode = down
+		down = head
+	}
+
+	return &SkipList{
+		HeadNode:     down,
+		MaxHeight:    maxHeight,
+		CurrentLevel: maxHeight -1,
+	}
+}
 

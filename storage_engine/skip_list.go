@@ -7,14 +7,14 @@ import ("math/rand/v2"
 
 type SkipList struct{
 	HeadNode *SkipListNode
-	MaxHeight uint8
-	CurrentLevel uint8 // current highest level 
+	MaxHeight int
+	CurrentLevel int // current highest level 
 }
 
 type SkipListNode struct{
 	Key []byte
 	Value []byte
-	Level uint8
+	Level int
 	// Pointer to the next node
 	NextNode *SkipListNode
 	DownNode *SkipListNode
@@ -76,7 +76,7 @@ func (sl *SkipList) Insert(Key, Value []byte) error {
 		newSkipListNode := new(SkipListNode)
 		newSkipListNode.Key = Key
 		newSkipListNode.Value = Value
-		newSkipListNode.Level = uint8(idx)
+		newSkipListNode.Level = idx
 
 		newSkipListNode.NextNode = updateList[idx].NextNode
 		updateList[idx].NextNode = newSkipListNode
