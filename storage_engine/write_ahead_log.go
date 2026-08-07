@@ -24,8 +24,6 @@ func OpenOrCreateFile(file string) (*os.File, error) {
     if err != nil {
         return nil, err
     }
-    
-
     return f, nil 
 }
 
@@ -54,12 +52,11 @@ func LoadCounter(file string) (int64, error) {
 	return int64(binary.LittleEndian.Uint64(TId)), nil
 }
 
-func WriteToWAL(Op uint8, Key []byte, Value []byte) int {
+func WriteToWAL(Key []byte, Value []byte) error {
 
 	f, err := OpenOrCreateFile("WAL.bin")
 	if err != nil { 
-		log.Fatal(err)
-		return 0 
+		return err
 	}
 	defer f.Close()
 
@@ -72,7 +69,7 @@ func WriteToWAL(Op uint8, Key []byte, Value []byte) int {
 	curr_counter += 1
 	WALRecord := WALInput { 
 		TransactionId: uint64(curr_counter),
-		Op: Op, // INSERT,PUT,DELETE
+		Op: 1, // INSERT,PUT,DELETE
 		Key: Key,
 		KeyLen: uint16(len(Key)),
 		Value: Value,
@@ -94,10 +91,11 @@ func WriteToWAL(Op uint8, Key []byte, Value []byte) int {
 	// write to the counter.bin file 
 	SaveCounter(int64(WALRecord.TransactionId))
 
-	return 1
+	return nil
 }
 
-func RecoverFromWAL (file string) (int, WALInput) {
+
+func RecoverFromWAL(file string) (int, WALInput) {
 	// f, err := OpenOrCreateFile(file)
 	// if err != nil { 
 	// 	log.Fatal(err)
