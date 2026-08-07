@@ -74,7 +74,7 @@ func WriteToWAL(Key []byte, Value []byte) error {
 		KeyLen: uint16(len(Key)),
 		Value: Value,
 		ValueLen: uint32(len(Value)),
-		CheckSum:0, // do checksum calc later
+		CheckSum:0, 
 	}
 
 	data := []byte(fmt.Sprintf("%d%d%d", WALRecord.Key, WALRecord.Value, WALRecord.TransactionId))
@@ -126,41 +126,32 @@ func RecoverFromWAL(file string) (int, WALInput) {
 		if err != nil {
 			break
 		}
-
 		_, err = f.Read(Op)
 		if err != nil {
 			break
 		}
-
 		_, err = f.Read(KeyLen)
 		if err != nil {
 			break
 		}
-
 		Key := make([]byte, binary.LittleEndian.Uint16(KeyLen))
-
 		_, err = f.Read(Key)
 		if err != nil {
 			break
 		}
-
 		_, err = f.Read(ValueLen)
 		if err != nil {
 			break
 		}
-
 		Value := make([]byte, binary.LittleEndian.Uint32(ValueLen))
-
 		_, err = f.Read(Value)
 		if err != nil {
 			break
 		}
-
 		_, err = f.Read(CheckSum)
 		if err != nil {
 			break
 		}
-
 		WALRecord := WALInput{
 			TransactionId: binary.LittleEndian.Uint64(TId),
 			Op: Op[0],
@@ -170,11 +161,8 @@ func RecoverFromWAL(file string) (int, WALInput) {
 			ValueLen: uint32(len(Value)),
 			CheckSum: binary.LittleEndian.Uint32(CheckSum),
 		}
-
 		WALRecords = append(WALRecords, WALRecord)
-
 	}
-
 	return len(WALRecords), WALRecords[len(WALRecords)-1]
 }
 

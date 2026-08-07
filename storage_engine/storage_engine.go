@@ -6,7 +6,27 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
+	"strings"
+	"strconv"
 )
+
+type SSTableComponent string
+type SSTableExtension string
+
+const (
+	DataComponent   SSTableComponent = "data"
+	IndexComponent  SSTableComponent = "index"
+	MetaComponent   SSTableComponent = "meta"
+)
+
+const (
+	SSTExtension SSTableExtension = "sst"
+	IndexExtension SSTableExtension = "idx"
+)
+
+const MAX_SIZE_BEFORE_FLUSH = 64 * 1024 * 1024
+const SSTABLES_DIR = "./sstables"
+
 
 type Engine interface {
     Put(Key, Value []byte) error
@@ -16,9 +36,12 @@ type Engine interface {
 }
 
 
+
+
 type KVStorage struct { 
 	Mu sync.RWMutex
-	MemTable SkipList
+	MemTable *SkipList
+
 	WALFile *os.File
 }
 
@@ -68,20 +91,63 @@ func (s * KVStorage) WriteToWAL(Op uint8, Key, Value[]byte) error {
 
 func (s * KVStorage) Put (Key,Value []byte) error {
 	s.Mu.Lock()
-	defer s.Mu.Unlock()
 	err := s.WriteToWAL(2, Key, Value);
 	if err != nil{
 		return err 
 	}
 
 	// write to memtable
-	err = s.MemTable.Insert(Key, Value)
-	if err != nil{
-		fmt.Println("unable to insert key")
-		return nil
+	_, node := s.MemTable.Get(Key)
+	  if node != nil {
+        err = s.MemTable.Update(Key, Value)
+    } else {
+        err = s.MemTable.Insert(Key, Value)
+    }
+
+	if err != nil {
+		return err
 	}
 
+	if s.MemTable.Size >= MAX_SIZE_BEFORE_FLUSH{
+		// freeze current memTable and then flush it into SSTable
+		newMemTable := NewSkipList(16)
+		oldMemTable := s.MemTable
+		s.MemTable = newMemTable
+		s.Mu.Unlock()
+		f, err := os.OpenFile(generateName(DataComponent, SSTExtension), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
+		if err != nil {
+			return err
+		}
+
+		defer f.Close()
+
+		go func () {
+			// get to base node of the dummy node tower
+			curr := oldMemTable.HeadNode 
+			for curr.DownNode != nil {
+				curr = curr.DownNode
+			}
+			// traverse next for every single element in the list
+			curr = curr.NextNode
+			for curr != nil { 
+				key := curr.Record.Key
+				value := curr.Record.Value
+					
+				binary.Write(f, binary.LittleEndian, uint32(len(key)))
+				f.Write(key)
+
+				binary.Write(f, binary.LittleEndian, uint32(len(value)))
+				f.Write(value)
+
+				curr = curr.NextNode
+				
+			}
+		
+		}()
+	}
+	s.Mu.Unlock()
 	return nil 
+
 }
 
 func ( s * KVStorage) Read(Key []byte) (string, error) { 
@@ -96,7 +162,7 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 	_, node := s.MemTable.Get(Key)
 	
 	if node != nil  { 
-		return string(node.Value), nil
+		return string(node.Record.Value), nil
 	}else{
 		// read from disk 
 		return "123", nil
@@ -104,25 +170,39 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 
 }
 
-func NewSkipList(maxHeight int) *SkipList {
+func generateName(component SSTableComponent, extension SSTableExtension) string {
+	entries, err := os.ReadDir(SSTABLES_DIR)
+	if err != nil {
+		fmt.Println(err)
+		return ""
+	}
 
-	var down *SkipListNode
+	max := 0
 
-	for i := 0; i < maxHeight; i++ {
+	for _, entry := range entries {
+		name := entry.Name()
+		parts := strings.Split(name, "-")
 
-		head := &SkipListNode{
-			Key:   []byte{},
-			Level: i,
+		if len(parts) == 3 {
+			genNum, err := strconv.Atoi(parts[1])
+			if err != nil {
+				fmt.Println(err)
+				return ""
+			}
+
+			if genNum > max {
+				max = genNum
+			}
 		}
-
-		head.DownNode = down
-		down = head
 	}
 
-	return &SkipList{
-		HeadNode:     down,
-		MaxHeight:    maxHeight,
-		CurrentLevel: maxHeight -1,
-	}
+	newName := fmt.Sprintf(
+		"sstable-%d-%s.%s",
+		max+1,
+		component,
+		extension,
+	)
+
+	return newName
 }
 

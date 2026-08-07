@@ -1,20 +1,29 @@
-package main 
+package main
 
-import ("math/rand/v2"
-		"fmt"
-		"bytes"
-	)
+import (
+	"bytes"
+	"fmt"
+	"math/rand/v2"
+)
 
-type SkipList struct{
-	HeadNode *SkipListNode
-	MaxHeight int
-	CurrentLevel int // current highest level 
+
+type SkipList struct {
+	HeadNode    *SkipListNode
+	MaxHeight   int
+	CurrentLevel int // current highest level
+	Size uint64
 }
 
-type SkipListNode struct{
-	Key []byte
+type Entry struct {
+	Key   []byte
 	Value []byte
-	Level int
+}
+
+type SkipListNode struct {
+	// Record stores the entry of key and value pair
+	Record *Entry
+	Level  int
+
 	// Pointer to the next node
 	NextNode *SkipListNode
 	DownNode *SkipListNode
@@ -30,12 +39,12 @@ func (sl *SkipList) Get(Key []byte) ([]*SkipListNode, *SkipListNode) {
 	for curr != nil {
 
 		for curr.NextNode != nil &&
-			bytes.Compare(Key, curr.NextNode.Key) >= 0 {
+			bytes.Compare(Key, curr.NextNode.Record.Key) >= 0 {
 			curr = curr.NextNode
 		}
 
 		// If we found the key
-		if bytes.Equal(curr.Key, Key) {
+		if curr.Record != nil && bytes.Equal(curr.Record.Key, Key) {
 			return update, curr
 		}
 
@@ -48,7 +57,6 @@ func (sl *SkipList) Get(Key []byte) ([]*SkipListNode, *SkipListNode) {
 	return update, nil
 }
 
-
 func (sl *SkipList) Insert(Key, Value []byte) error {
 
 	updateList, keyNode := sl.Get(Key)
@@ -58,11 +66,20 @@ func (sl *SkipList) Insert(Key, Value []byte) error {
 		return nil
 	}
 
-	// create bottom level node
+	// Create one record for the entire tower
+	record := &Entry{
+		Key:   append([]byte(nil), Key...),
+		Value: append([]byte(nil), Value...),
+	}
+
+	// Add the actual key/value data to the MemTable size.
+	sl.Size += uint64(len(record.Key))
+	sl.Size += uint64(len(record.Value))
+
+	// Create bottom level node
 	skipListNode := new(SkipListNode)
 
-	skipListNode.Key = Key
-	skipListNode.Value = Value
+	skipListNode.Record = record
 	skipListNode.Level = 0
 
 	skipListNode.NextNode = updateList[0].NextNode
@@ -71,11 +88,12 @@ func (sl *SkipList) Insert(Key, Value []byte) error {
 	curr := skipListNode
 	idx := 1
 
-
 	for coinFlip() == "Heads" && idx < sl.MaxHeight {
+
 		newSkipListNode := new(SkipListNode)
-		newSkipListNode.Key = Key
-		newSkipListNode.Value = Value
+
+		// Same record as the node below
+		newSkipListNode.Record = record
 		newSkipListNode.Level = idx
 
 		newSkipListNode.NextNode = updateList[idx].NextNode
@@ -88,26 +106,66 @@ func (sl *SkipList) Insert(Key, Value []byte) error {
 		idx++
 	}
 
-
-	// update current height if this node created a new level
+	// Update current height if this node created a new level
 	if idx-1 > sl.CurrentLevel {
-		sl.CurrentLevel = idx-1
+		sl.CurrentLevel = idx - 1
 	}
-
 
 	return nil
 }
 
-//private function
-func coinFlip() string{
-	if rand.IntN(2) == 0{
+func (sl *SkipList) Update(Key, Value []byte) error {
+
+	_, keyNode := sl.Get(Key)
+
+	if keyNode == nil {
+		return fmt.Errorf("key not found")
+	}
+
+	oldValueSize := len(keyNode.Record.Value)
+
+	newValue := append([]byte(nil), Value...)
+
+	// Adjust size based on the difference between
+	// the old value and the new value.
+	sl.Size -= uint64(oldValueSize)
+	sl.Size += uint64(len(newValue))
+
+	keyNode.Record.Value = newValue
+
+	return nil
+}
+
+// private function
+func coinFlip() string {
+	if rand.IntN(2) == 0 {
 		return "Heads"
 	}
 	return "Tails"
 }
 
-
 func (sl *SkipList) Delete(Key []byte) error {
-	
-	return nil 
+
+	return nil
+}
+
+func NewSkipList(maxHeight int) *SkipList {
+
+	var down *SkipListNode
+
+	for i := 0; i < maxHeight; i++ {
+
+		head := &SkipListNode{
+			Level: i,
+		}
+
+		head.DownNode = down
+		down = head
+	}
+
+	return &SkipList{
+		HeadNode:     down,
+		MaxHeight:    maxHeight,
+		CurrentLevel: maxHeight - 1,
+	}
 }
