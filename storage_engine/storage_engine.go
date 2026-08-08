@@ -81,11 +81,15 @@ func (s * KVStorage) WriteToWAL(Op uint8, Key, Value[]byte) error {
 	binary.Write(f, binary.LittleEndian, WALRecord.TransactionId)
 	binary.Write(f, binary.LittleEndian, WALRecord.Op)
 	binary.Write(f, binary.LittleEndian, WALRecord.KeyLen)
-	binary.Write(f, binary.LittleEndian, WALRecord.Key)
+
+	f.Write(WALRecord.Key)
+
 	binary.Write(f, binary.LittleEndian, WALRecord.ValueLen)
-	binary.Write(f, binary.LittleEndian, WALRecord.Value)
+
+	f.Write(WALRecord.Value)
+
 	binary.Write(f, binary.LittleEndian, WALRecord.CheckSum)
-	// write to the counter.bin file 
+
 	SaveCounter(int64(WALRecord.TransactionId))
 
 	return nil

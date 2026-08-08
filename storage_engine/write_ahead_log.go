@@ -95,75 +95,84 @@ func WriteToWAL(Key []byte, Value []byte) error {
 }
 
 
-func RecoverFromWAL(file string) (int, WALInput) {
-	// f, err := OpenOrCreateFile(file)
-	// if err != nil { 
-	// 	log.Fatal(err)
-	// 	return 0 
-	// }
-	// defer f.Close()
+func RecoverFromWAL(file string) (int, []WALInput) {
+    f, err := os.Open(file)
+    if err != nil {
+        log.Println("failed to open WAL:", err)
+        return 0, nil
+    }
+    defer f.Close()
 
-	f, err := os.Open(file)
-	if err != nil{
-		log.Fatal(err)
-	}
+    WALRecords := []WALInput{}
 
-	defer f.Close()
-	
-	WALRecords := []WALInput{}
+    for {
+        var transactionID uint64
+        var op uint8
+        var keyLen uint16
+        var valueLen uint32
+        var checksum uint32
 
-	for {
-		
-		//read transactionId
-		TId := make([]byte, 8)
-		Op := make([]byte, 1)
-		
-		KeyLen:= make([]byte, 2)
-		ValueLen := make([]byte, 4)
-		CheckSum := make([]byte, 4)
+        // Transaction ID
+        err = binary.Read(f, binary.LittleEndian, &transactionID)
+        if err != nil {
+            break
+        }
 
-		_, err = f.Read(TId)
-		if err != nil {
-			break
-		}
-		_, err = f.Read(Op)
-		if err != nil {
-			break
-		}
-		_, err = f.Read(KeyLen)
-		if err != nil {
-			break
-		}
-		Key := make([]byte, binary.LittleEndian.Uint16(KeyLen))
-		_, err = f.Read(Key)
-		if err != nil {
-			break
-		}
-		_, err = f.Read(ValueLen)
-		if err != nil {
-			break
-		}
-		Value := make([]byte, binary.LittleEndian.Uint32(ValueLen))
-		_, err = f.Read(Value)
-		if err != nil {
-			break
-		}
-		_, err = f.Read(CheckSum)
-		if err != nil {
-			break
-		}
-		WALRecord := WALInput{
-			TransactionId: binary.LittleEndian.Uint64(TId),
-			Op: Op[0],
-			Key: Key,
-			KeyLen: uint16(len(Key)),
-			Value: Value,
-			ValueLen: uint32(len(Value)),
-			CheckSum: binary.LittleEndian.Uint32(CheckSum),
-		}
-		WALRecords = append(WALRecords, WALRecord)
-	}
-	return len(WALRecords), WALRecords[len(WALRecords)-1]
+        // Operation
+        err = binary.Read(f, binary.LittleEndian, &op)
+        if err != nil {
+            break
+        }
+
+        // Key length
+        err = binary.Read(f, binary.LittleEndian, &keyLen)
+        if err != nil {
+            break
+        }
+
+        // Key
+        key := make([]byte, keyLen)
+        _, err = io.ReadFull(f, key)
+        if err != nil {
+            break
+        }
+
+        // Value length
+        err = binary.Read(f, binary.LittleEndian, &valueLen)
+        if err != nil {
+            break
+        }
+
+        // Value
+        value := make([]byte, valueLen)
+        _, err = io.ReadFull(f, value)
+        if err != nil {
+            break
+        }
+
+        // Checksum
+        err = binary.Read(f, binary.LittleEndian, &checksum)
+        if err != nil {
+            break
+        }
+
+        WALRecord := WALInput{
+            TransactionId: transactionID,
+            Op:            op,
+            Key:           key,
+            KeyLen:        keyLen,
+            Value:         value,
+            ValueLen:      valueLen,
+            CheckSum:      checksum,
+        }
+
+        WALRecords = append(WALRecords, WALRecord)
+    }
+
+    if len(WALRecords) == 0 {
+        return 0, WALInput{}
+    }
+
+    return len(WALRecords), WALRecords[len(WALRecords)-1]
 }
-
 
