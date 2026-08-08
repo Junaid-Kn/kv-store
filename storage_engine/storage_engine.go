@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"strings"
 	"strconv"
+	"path/filepath"
 )
 
 type SSTableComponent string
@@ -24,7 +25,7 @@ const (
 	IndexExtension SSTableExtension = "idx"
 )
 
-const MAX_SIZE_BEFORE_FLUSH = 64 * 1024 * 1024
+const MAX_SIZE_BEFORE_FLUSH = 32
 const SSTABLES_DIR = "./sstables"
 
 
@@ -114,39 +115,79 @@ func (s * KVStorage) Put (Key,Value []byte) error {
 		oldMemTable := s.MemTable
 		s.MemTable = newMemTable
 		s.Mu.Unlock()
-		f, err := os.OpenFile(generateName(DataComponent, SSTExtension), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
-		if err != nil {
-			return err
-		}
-
-		defer f.Close()
-
-		go func () {
-			// get to base node of the dummy node tower
-			curr := oldMemTable.HeadNode 
-			for curr.DownNode != nil {
-				curr = curr.DownNode
-			}
-			// traverse next for every single element in the list
-			curr = curr.NextNode
-			for curr != nil { 
-				key := curr.Record.Key
-				value := curr.Record.Value
-					
-				binary.Write(f, binary.LittleEndian, uint32(len(key)))
-				f.Write(key)
-
-				binary.Write(f, binary.LittleEndian, uint32(len(value)))
-				f.Write(value)
-
-				curr = curr.NextNode
-				
-			}
 		
-		}()
+
+		go func() {
+    name := generateName(DataComponent, SSTExtension)
+
+    f, err := os.OpenFile(
+        name,
+        os.O_APPEND|os.O_CREATE|os.O_RDWR,
+        0644,
+    )
+    if err != nil {
+        fmt.Println("failed to open SSTable:", err)
+        return
+    }
+    defer f.Close()
+
+    curr := oldMemTable.HeadNode
+
+    for curr.DownNode != nil {
+        curr = curr.DownNode
+    }
+
+    curr = curr.NextNode
+
+    for curr != nil {
+
+        key := curr.Record.Key
+        value := curr.Record.Value
+
+        err := binary.Write(
+            f,
+            binary.LittleEndian,
+            uint32(len(key)),
+        )
+        if err != nil {
+            fmt.Println("failed to write key length:", err)
+            return
+        }
+
+        _, err = f.Write(key)
+        if err != nil {
+            fmt.Println("failed to write key:", err)
+            return
+        }
+
+        err = binary.Write(
+            f,
+            binary.LittleEndian,
+            uint32(len(value)),
+        )
+        if err != nil {
+            fmt.Println("failed to write value length:", err)
+            return
+        }
+
+        _, err = f.Write(value)
+        if err != nil {
+            fmt.Println("failed to write value:", err)
+            return
+        }
+
+        curr = curr.NextNode
+    }
+
+    fmt.Println("Finished flushing:", name)
+}()
+
+		return nil
+	}else{
+		s.Mu.Unlock()
+		return nil
 	}
-	s.Mu.Unlock()
-	return nil 
+	 
 
 }
 
@@ -203,6 +244,6 @@ func generateName(component SSTableComponent, extension SSTableExtension) string
 		extension,
 	)
 
-	return newName
+	return filepath.Join(SSTABLES_DIR, newName)
 }
 
