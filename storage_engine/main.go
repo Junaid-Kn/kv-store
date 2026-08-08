@@ -1,103 +1,113 @@
 package main
 
 import (
-"fmt"
-"os"
-"time"
+	"fmt"
+	"os"
+	"time"
 )
 
 func main() {
 
-// Make sure the SSTable directory exists.
-err := os.MkdirAll(SSTABLES_DIR, 0755)
-if err != nil {
-	fmt.Println("Failed to create SSTable directory:", err)
-	return
-}
+	// Make sure the SSTable directory exists.
+	err := os.MkdirAll(SSTABLES_DIR, 0755)
+	if err != nil {
+		fmt.Println("Failed to create SSTable directory:", err)
+		return
+	}
 
-// Create a KVStorage with an empty MemTable.
-s := &KVStorage{
-	MemTable: NewSkipList(16),
-}
+	// Create a KVStorage with an empty MemTable.
+	s := &KVStorage{
+		MemTable: NewSkipList(16),
+	}
 
-fmt.Println("=== PUT TEST ===")
+	fmt.Println("=== STRESS TEST: 10,000 KEYS ===")
 
-// Insert some values.
-err = s.Put([]byte("apple"), []byte("red"))
-if err != nil {
-	fmt.Println("Put error:", err)
-	return
-}
+	start := time.Now()
 
-err = s.Put([]byte("banana"), []byte("yellow"))
-if err != nil {
-	fmt.Println("Put error:", err)
-	return
-}
+	// Insert 10,000 keys.
+	for i := 0; i < 10000; i++ {
 
-err = s.Put([]byte("carrot"), []byte("orange"))
-if err != nil {
-	fmt.Println("Put error:", err)
-	return
-}
+		key := []byte(fmt.Sprintf("key-%05d", i))
+		value := []byte(fmt.Sprintf("value-%05d", i))
 
-fmt.Println("Inserted apple, banana, carrot")
+		err := s.Put(key, value)
+		if err != nil {
+			fmt.Printf("Put error at key %d: %v\n", i, err)
+			return
+		}
+	}
 
-// Give the background flush goroutine time to finish.
-time.Sleep(1 * time.Second)
+	elapsed := time.Since(start)
 
-fmt.Println("\n=== GET TEST ===")
+	fmt.Printf("Inserted 10,000 keys in %v\n", elapsed)
+	fmt.Printf("Current MemTable size: %d\n", s.MemTable.Size)
 
-value, err := s.Read([]byte("apple"))
-if err != nil {
-	fmt.Println("Read error:", err)
-	return
-}
+	// Give the background flush goroutine time to finish.
+	time.Sleep(2 * time.Second)
 
-fmt.Println("apple =", value)
+	fmt.Println("\n=== READ TEST ===")
 
-value, err = s.Read([]byte("banana"))
-if err != nil {
-	fmt.Println("Read error:", err)
-	return
-}
+	// Test several keys throughout the dataset.
+	testKeys := []int{
+		0,
+		1,
+		100,
+		1000,
+		5000,
+		9998,
+		9999,
+	}
 
-fmt.Println("banana =", value)
+	for _, i := range testKeys {
 
-value, err = s.Read([]byte("carrot"))
-if err != nil {
-	fmt.Println("Read error:", err)
-	return
-}
+		key := []byte(fmt.Sprintf("key-%05d", i))
 
-fmt.Println("carrot =", value)
+		start := time.Now()
 
-fmt.Println("\n=== UPDATE TEST ===")
+		value, err := s.Read(key)
 
-// Update an existing key.
-err = s.Put([]byte("apple"), []byte("green"))
-if err != nil {
-	fmt.Println("Update error:", err)
-	return
-}
+		elapsed := time.Since(start)
 
-value, err = s.Read([]byte("apple"))
-if err != nil {
-	fmt.Println("Read error:", err)
-	return
-}
+		if err != nil {
+			fmt.Printf(
+				"Read key-%05d ERROR: %v (%v)\n",
+				i,
+				err,
+				elapsed,
+			)
+			continue
+		}
 
-fmt.Println("apple after update =", value)
+		fmt.Printf(
+			"key-%05d = %s (%v)\n",
+			i,
+			value,
+			elapsed,
+		)
+	}
 
-fmt.Println("\n=== SSTABLE TEST ===")
+	fmt.Println("\n=== MISSING KEY TEST ===")
 
-// Show the SSTable name that would be generated.
-name := generateName(DataComponent, SSTExtension)
-fmt.Println("Next SSTable:", name)
+	start = time.Now()
 
-// Show current MemTable size.
-fmt.Println("Current MemTable size:", s.MemTable.Size)
+	_, err = s.Read([]byte("key-99999"))
 
+	elapsed = time.Since(start)
+
+	fmt.Printf(
+		"Missing key result: %v (%v)\n",
+		err,
+		elapsed,
+	)
+
+	fmt.Println("\n=== SSTABLE TEST ===")
+
+	name := generateName(DataComponent, SSTExtension)
+	fmt.Println("Next SSTable:", name)
+
+	fmt.Println("Current MemTable size:", s.MemTable.Size)
+
+	fmt.Println("\n=== STRESS TEST COMPLETE ===")
 }
 
 
