@@ -49,6 +49,76 @@ type KVStorage struct {
 	WALFile *os.File
 }
 
+
+func (s *KVStorage) WriteRecord(Op uint8, Key, Value []byte) error {
+	err := s.WriteToWAL(Op, Key, Value)
+
+	if err != nil {
+		return err
+	}
+
+	if Op == 2{
+		err = s.WriteToMTL(Key, Value)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil 
+}
+
+func (s * KVStorage) WriteToMTL(Key, Value[]byte) error {
+	f, err := os.OpenFile(
+		"memtable_log.bin",
+		os.O_APPEND|os.O_CREATE|os.O_RDWR,
+		0644,
+	)
+	if err != nil {
+		fmt.Println("failed to open MemTable Log:", err)
+		return err
+	}
+	defer f.Close()
+
+	err = binary.Write(
+			f,
+			binary.LittleEndian,
+			uint32(len(Key)),
+		)
+		if err != nil {
+			fmt.Println("failed to write key length:", err)
+			return err
+		}
+
+		_, err = f.Write(Key)
+		if err != nil {
+			fmt.Println("failed to write key:", err)
+			return err
+		}
+
+		err = binary.Write(
+			f,
+			binary.LittleEndian,
+			uint32(len(Value)),
+		)
+		if err != nil {
+			fmt.Println("failed to write value length:", err)
+			return err
+		}
+
+		_, err = f.Write(Value)
+		if err != nil {
+			fmt.Println("failed to write value:", err)
+			return err
+		}
+
+
+	
+	return nil
+
+}
+
+
+
 func (s * KVStorage) WriteToWAL(Op uint8, Key, Value[]byte) error { 
 	f, err := OpenOrCreateFile("WAL.bin")
 	if err != nil { 
@@ -99,11 +169,7 @@ func (s * KVStorage) WriteToWAL(Op uint8, Key, Value[]byte) error {
 
 func (s * KVStorage) Put(Key,Value []byte) error {
 	s.Mu.Lock()
-	err := s.WriteToWAL(2, Key, Value);
-	if err != nil{
-		return err 
-	}
-
+	var err error
 	// write to memtable
 	_, node := s.MemTable.Get(Key)
 	  if node != nil {
@@ -113,8 +179,14 @@ func (s * KVStorage) Put(Key,Value []byte) error {
         err = s.MemTable.Insert(Key, Value)
     }
 
+
 	if err != nil {
 		return err
+	}
+
+	err = s.WriteRecord(2, Key, Value);
+	if err != nil{
+		return err 
 	}
 
 	if s.MemTable.Size >= MAX_SIZE_BEFORE_FLUSH{
@@ -259,7 +331,7 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 func ( s * KVStorage) Read(Key []byte) (string, error) { 
 	s.Mu.RLock()
 	defer s.Mu.RUnlock()
-	err := s.WriteToWAL(3, Key, []byte(""));
+	err := s.WriteRecord(3, Key, []byte(""));
 	if err != nil{
 		return "", err 
 	}

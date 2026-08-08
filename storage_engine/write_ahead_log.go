@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"os"
 	"log"
+	"io"
 )
 var counter uint64 = 0  
 type WALInput struct{
@@ -95,11 +96,11 @@ func WriteToWAL(Key []byte, Value []byte) error {
 }
 
 
-func RecoverFromWAL(file string) (int, []WALInput) {
+func RecoverFromWAL(file string) (int, WALInput) {
     f, err := os.Open(file)
     if err != nil {
         log.Println("failed to open WAL:", err)
-        return 0, nil
+        return 0, WALInput{}
     }
     defer f.Close()
 
