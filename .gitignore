@@ -1,0 +1,18 @@
+# Generated storage-engine data
+storage_engine/WAL.bin
+storage_engine/counter.bin
+storage_engine/sstables/
+
+# Accidentally generated SSTables in the storage_engine directory
+storage_engine/*.sst
+
+# Go build output
+*.exe
+*.out
+*.test
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
