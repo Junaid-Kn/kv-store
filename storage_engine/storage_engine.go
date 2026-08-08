@@ -495,58 +495,53 @@ func searchDataFile(
     }
 
     for {
-        // If there is a right boundary, don't go past it.
-        currentPos, err := file.Seek(0, io.SeekCurrent)
-        if err != nil {
-            return nil, false, err
-        }
+		currentPos, err := file.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, false, err
+		}
 
-        if rightOffset != 0 && uint64(currentPos) >= rightOffset {
-            return nil, false, nil
-        }
+		if rightOffset != 0 && uint64(currentPos) >= rightOffset {
+			return nil, false, nil
+		}
 
-        // Read your record here.
-        // For example:
-        //
-        // [keyLen][valueLen][key][value]
-        //
-        var keyLen uint32
-        var valueLen uint32
+		var keyLen uint32
 
-        err = binary.Read(file, binary.LittleEndian, &keyLen)
-        if err != nil {
-            return nil, false, err
-        }
+		err = binary.Read(file, binary.LittleEndian, &keyLen)
+		if err != nil {
+			return nil, false, err
+		}
 
-        err = binary.Read(file, binary.LittleEndian, &valueLen)
-        if err != nil {
-            return nil, false, err
-        }
+		currentKey := make([]byte, keyLen)
 
-        currentKey := make([]byte, keyLen)
-        _, err = io.ReadFull(file, currentKey)
-        if err != nil {
-            return nil, false, err
-        }
+		_, err = io.ReadFull(file, currentKey)
+		if err != nil {
+			return nil, false, err
+		}
 
-        value := make([]byte, valueLen)
-        _, err = io.ReadFull(file, value)
-        if err != nil {
-            return nil, false, err
-        }
+		var valueLen uint32
 
-        cmp := bytes.Compare(currentKey, key)
+		err = binary.Read(file, binary.LittleEndian, &valueLen)
+		if err != nil {
+			return nil, false, err
+		}
 
-        if cmp == 0 {
-            return value, true, nil
-        }
+		value := make([]byte, valueLen)
 
-        if cmp > 0 {
-            // Because the SSTable is sorted,
-            // we have passed the key.
-            return nil, false, nil
-        }
-    }
+		_, err = io.ReadFull(file, value)
+		if err != nil {
+			return nil, false, err
+		}
+
+		cmp := bytes.Compare(currentKey, key)
+
+		if cmp == 0 {
+			return value, true, nil
+		}
+
+		if cmp > 0 {
+			return nil, false, nil
+		}
+	}
 }
 
 func getMaxGenNumber(entries []os.DirEntry) int{

@@ -77,7 +77,6 @@ func main() {
 			)
 			continue
 		}
-
 		fmt.Printf(
 			"key-%05d = %s (%v)\n",
 			i,
