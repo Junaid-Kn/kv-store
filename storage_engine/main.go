@@ -99,3 +99,16 @@ fmt.Println("Next SSTable:", name)
 fmt.Println("Current MemTable size:", s.MemTable.Size)
 
 }
+
+
+// have sorted data blocks on disk
+
+// [keyLen][Key][ValLen][Value] [Index]
+
+
+// Things to do:
+// 1. Create the index for the SSTables
+// 2. Durability for Memtables incase of crash 
+// (create seperate log that appends every write that goes into MemTable)
+// 3. Bloom Filter implementation for fast Lookup
+// 4. Periodically merge the SSTable segments into 1 file and then delete the useless ones. 

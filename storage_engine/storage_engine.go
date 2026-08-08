@@ -27,7 +27,7 @@ const (
 
 const MAX_SIZE_BEFORE_FLUSH = 32
 const SSTABLES_DIR = "./sstables"
-
+const OFFSET_INTERVAL = 4 * 1024
 
 type Engine interface {
     Put(Key, Value []byte) error
@@ -37,12 +37,15 @@ type Engine interface {
 }
 
 
-
+type IndexEntry struct { 
+	Key []byte
+	ByteOffset uint64
+}
 
 type KVStorage struct { 
 	Mu sync.RWMutex
 	MemTable *SkipList
-
+	SSTableIndex []IndexEntry
 	WALFile *os.File
 }
 
@@ -90,7 +93,7 @@ func (s * KVStorage) WriteToWAL(Op uint8, Key, Value[]byte) error {
 
 
 
-func (s * KVStorage) Put (Key,Value []byte) error {
+func (s * KVStorage) Put(Key,Value []byte) error {
 	s.Mu.Lock()
 	err := s.WriteToWAL(2, Key, Value);
 	if err != nil{
@@ -102,6 +105,7 @@ func (s * KVStorage) Put (Key,Value []byte) error {
 	  if node != nil {
         err = s.MemTable.Update(Key, Value)
     } else {
+
         err = s.MemTable.Insert(Key, Value)
     }
 
@@ -117,70 +121,127 @@ func (s * KVStorage) Put (Key,Value []byte) error {
 		s.Mu.Unlock()
 		
 
-		go func() {
-    name := generateName(DataComponent, SSTExtension)
+	go func() {
+		SSTFileName := generateName(DataComponent, SSTExtension)
+		IndexFileName := generateName(IndexComponent, IndexExtension)
+		
+		f, err := os.OpenFile(
+			SSTFileName,
+			os.O_APPEND|os.O_CREATE|os.O_RDWR,
+			0644,
+		)
+		if err != nil {
+			fmt.Println("failed to open SSTable:", err)
+			return
+		}
+		defer f.Close()
 
-    f, err := os.OpenFile(
-        name,
-        os.O_APPEND|os.O_CREATE|os.O_RDWR,
-        0644,
-    )
-    if err != nil {
-        fmt.Println("failed to open SSTable:", err)
-        return
-    }
-    defer f.Close()
 
-    curr := oldMemTable.HeadNode
+		idxFile, err := os.OpenFile(
+			IndexFileName,
+			os.O_APPEND|os.O_CREATE|os.O_RDWR,
+			0644,
+		)
+		if err != nil {
+			fmt.Println("failed to open index file :", err)
+			return
+		}
 
-    for curr.DownNode != nil {
-        curr = curr.DownNode
-    }
+		defer idxFile.Close()
 
-    curr = curr.NextNode
+		curr := oldMemTable.HeadNode
 
-    for curr != nil {
+		for curr.DownNode != nil {
+			curr = curr.DownNode
+		}
 
-        key := curr.Record.Key
-        value := curr.Record.Value
+		curr = curr.NextNode
+		currSize := 0
+		nextOffsetInterval := OFFSET_INTERVAL
 
-        err := binary.Write(
-            f,
-            binary.LittleEndian,
-            uint32(len(key)),
-        )
-        if err != nil {
-            fmt.Println("failed to write key length:", err)
-            return
-        }
+		for curr != nil {
 
-        _, err = f.Write(key)
-        if err != nil {
-            fmt.Println("failed to write key:", err)
-            return
-        }
+			key := curr.Record.Key
+			value := curr.Record.Value
+			recordOffset := currSize
+			err := binary.Write(
+				f,
+				binary.LittleEndian,
+				uint32(len(key)),
+			)
+			if err != nil {
+				fmt.Println("failed to write key length:", err)
+				return
+			}
 
-        err = binary.Write(
-            f,
-            binary.LittleEndian,
-            uint32(len(value)),
-        )
-        if err != nil {
-            fmt.Println("failed to write value length:", err)
-            return
-        }
+			_, err = f.Write(key)
+			if err != nil {
+				fmt.Println("failed to write key:", err)
+				return
+			}
 
-        _, err = f.Write(value)
-        if err != nil {
-            fmt.Println("failed to write value:", err)
-            return
-        }
+			err = binary.Write(
+				f,
+				binary.LittleEndian,
+				uint32(len(value)),
+			)
+			if err != nil {
+				fmt.Println("failed to write value length:", err)
+				return
+			}
 
-        curr = curr.NextNode
-    }
+			_, err = f.Write(value)
+			if err != nil {
+				fmt.Println("failed to write value:", err)
+				return
+			}
 
-    fmt.Println("Finished flushing:", name)
-}()
+			currSize += 4 + len(key) + 4 + len(value)
+			if currSize >= OFFSET_INTERVAL{
+				idx := IndexEntry { 
+					Key: append([]byte(nil), key...),
+					ByteOffset: uint64(recordOffset),
+				}
+				// s.SSTableIndex = append(s.SSTableIndex, idx)
+				
+				nextOffsetInterval += OFFSET_INTERVAL
+
+				// write to the indxFile in the following format
+				// [KeyLen][Key][OffSet]
+				err := binary.Write(
+					idxFile,
+					binary.LittleEndian,
+					uint32(len(idx.Key)),
+				)
+				if err != nil {
+					fmt.Println("failed to write key length:", err)
+					return
+				}
+
+				_, err = f.Write(idx.Key)
+				if err != nil {
+					fmt.Println("failed to write key:", err)
+					return
+				}
+
+				err = binary.Write(
+					idxFile,
+					binary.LittleEndian,
+					uint64(recordOffset),
+				)
+				if err != nil {
+					fmt.Println("failed to write key:", err)
+					return
+				}
+				
+			}
+
+			curr = curr.NextNode
+		}
+
+		fmt.Println("Finished flushing:", SSTFileName)
+		fmt.Println("Finished flushing:", IndexFileName)
+	}()
 
 		return nil
 	}else{
