@@ -297,7 +297,7 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 					return
 				}
 
-				_, err = f.Write(idx.Key)
+				_, err = idxFile.Write(idx.Key)
 				if err != nil {
 					fmt.Println("failed to write key:", err)
 					return
@@ -339,7 +339,6 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 		return "", err 
 	}
 	_, node := s.MemTable.Get(Key)
-	
 	if node != nil  { 
 		return string(node.Record.Value), nil
 	}else{
@@ -352,7 +351,7 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 		}
 
 		max := getMaxGenNumber(entries)
-
+		
 		for max > 0 {
 
 			// Reset index for this SSTable
@@ -371,7 +370,6 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 			if err != nil {
 				return "", err
 			}
-
 			// Load SSTable Index into memory
 			err = s.LoadSSTableIndex(indexFile)
 			indexFile.Close()
@@ -510,14 +508,12 @@ func searchDataFile(
 		if err != nil {
 			return nil, false, err
 		}
-
 		currentKey := make([]byte, keyLen)
 
 		_, err = io.ReadFull(file, currentKey)
 		if err != nil {
 			return nil, false, err
 		}
-
 		var valueLen uint32
 
 		err = binary.Read(file, binary.LittleEndian, &valueLen)
@@ -623,3 +619,48 @@ func (s *KVStorage) LoadSSTableIndex(file *os.File) error {
         s.SSTableIndex = append(s.SSTableIndex, indexEntry)
     }
 }
+
+// func (s *KVStorage) LoadSSTableIndex(file *os.File) error {
+// 	for {
+// 		var keyLen uint32
+// 		var offset uint64
+
+// 		err := binary.Read(file, binary.LittleEndian, &keyLen)
+
+// 		if err == io.EOF {
+// 			return nil
+// 		}
+
+// 		if err != nil {
+// 			fmt.Println("ERROR READING KEY LENGTH:", err)
+// 			return err
+// 		}
+
+// 		fmt.Println("keyLen:", keyLen)
+
+// 		key := make([]byte, keyLen)
+
+// 		_, err = io.ReadFull(file, key)
+// 		if err != nil {
+// 			fmt.Println("ERROR READING KEY:", err)
+// 			return err
+// 		}
+
+// 		fmt.Println("key:", string(key))
+
+// 		err = binary.Read(file, binary.LittleEndian, &offset)
+// 		if err != nil {
+// 			fmt.Println("ERROR READING OFFSET:", err)
+// 			return err
+// 		}
+
+// 		fmt.Println("offset:", offset)
+
+// 		indexEntry := IndexEntry{
+// 			Key:        key,
+// 			ByteOffset: offset,
+// 		}
+
+// 		s.SSTableIndex = append(s.SSTableIndex, indexEntry)
+// 	}
+// }
