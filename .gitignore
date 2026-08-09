@@ -2,7 +2,7 @@
 storage_engine/WAL.bin
 storage_engine/counter.bin
 storage_engine/sstables/
-
+data/*
 # Accidentally generated SSTables in the storage_engine directory
 storage_engine/*.sst
 storage_engine/memtable_log.bin
