@@ -1,4 +1,4 @@
-package main
+package storage_engine
 import (
 	// "errors"
 	"os"
@@ -29,7 +29,7 @@ const (
 )
 
 const MAX_SIZE_BEFORE_FLUSH = 32*1024
-const SSTABLES_DIR = "./sstables"
+// const SSTABLES_DIR = "./sstables"
 const OFFSET_INTERVAL = 4 * 1024
 
 type Engine interface {
@@ -49,7 +49,34 @@ type KVStorage struct {
 	Mu sync.RWMutex
 	MemTable *SkipList
 	SSTableIndex []IndexEntry
-	WALFile *os.File
+	WALDir string
+	SSTablesDir string
+	DataDir string
+}
+
+
+func NewKVStorage(dataDir string) (*KVStorage, error) {
+    dataDir, err := filepath.Abs(dataDir)
+    if err != nil {
+        return nil, err
+    }
+
+    s := &KVStorage{
+		MemTable: NewSkipList(16),
+        DataDir:     dataDir,
+        WALDir:      filepath.Join(dataDir, "wal"),
+        SSTablesDir: filepath.Join(dataDir, "sstables"),
+    }
+
+    if err := os.MkdirAll(s.WALDir, 0755); err != nil {
+        return nil, err
+    }
+
+    if err := os.MkdirAll(s.SSTablesDir, 0755); err != nil {
+        return nil, err
+    }
+
+    return s, nil
 }
 
 
@@ -201,8 +228,8 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 		
 
 	go func() {
-		SSTFileName := generateName(DataComponent, SSTExtension)
-		IndexFileName := generateName(IndexComponent, IndexExtension)
+		SSTFileName := GenerateName(DataComponent, SSTExtension, s.SSTablesDir)
+		IndexFileName := GenerateName(IndexComponent, IndexExtension, s.SSTablesDir)
 		
 		f, err := os.OpenFile(
 			SSTFileName,
@@ -344,14 +371,15 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 	}else{
 		// read from disk
 		// Load SSTableIndex here first
-		entries, err := os.ReadDir(SSTABLES_DIR)
+	
+		entries, err := os.ReadDir(s.SSTablesDir)
 		if err != nil {
 			fmt.Println(err)
 			return "", err
 		}
 
 		max := getMaxGenNumber(entries)
-		
+
 		for max > 0 {
 
 			// Reset index for this SSTable
@@ -364,7 +392,7 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 				IndexExtension,
 			)
 
-			idxPath := filepath.Join(SSTABLES_DIR, idxFile)
+			idxPath := filepath.Join(s.SSTablesDir, idxFile)
 
 			indexFile, err := os.Open(idxPath)
 			if err != nil {
@@ -398,7 +426,7 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 			)
 
 			dataPath := filepath.Join(
-				SSTABLES_DIR,
+				s.SSTablesDir,
 				dataFileName,
 			)
 
@@ -562,8 +590,8 @@ func getMaxGenNumber(entries []os.DirEntry) int{
 
 }
 
-func generateName(component SSTableComponent, extension SSTableExtension) string {
-	entries, err := os.ReadDir(SSTABLES_DIR)
+func GenerateName(component SSTableComponent, extension SSTableExtension, dir string) string {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		fmt.Println(err)
 		return ""
@@ -582,7 +610,7 @@ func generateName(component SSTableComponent, extension SSTableExtension) string
 		extension,
 	)
 
-	return filepath.Join(SSTABLES_DIR, newName)
+	return filepath.Join(dir, newName)
 }
 
 

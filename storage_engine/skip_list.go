@@ -1,4 +1,4 @@
-package main
+package storage_engine
 
 import (
 	"bytes"

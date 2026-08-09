@@ -4,21 +4,31 @@ import (
 	"fmt"
 	"os"
 	"time"
+	"github.com/Junaid-Kn/kv-store/storage_engine"
+	"log"
+	"path/filepath"
 )
 
 func main() {
 
-	// Make sure the SSTable directory exists.
-	err := os.MkdirAll(SSTABLES_DIR, 0755)
+	if len(os.Args) != 2 {
+		log.Fatalf("Usage: %s <data-directory>", os.Args[0])
+	}
+	dataDir, err := filepath.Abs(os.Args[1])
 	if err != nil {
-		fmt.Println("Failed to create SSTable directory:", err)
-		return
+		log.Fatal(err)
 	}
-
 	// Create a KVStorage with an empty MemTable.
-	s := &KVStorage{
-		MemTable: NewSkipList(16),
+	s, err := storage_engine.NewKVStorage(dataDir)
+	if err != nil {
+		log.Fatal(err)
 	}
+	// Make sure the SSTable directory exists.
+	// err = os.MkdirAll(s.SSTablesDir, 0755)
+	// if err != nil {
+	// 	fmt.Println("Failed to create SSTable directory:", err)
+	// 	return
+	// }
 
 	fmt.Println("=== STRESS TEST: 10,000 KEYS ===")
 
@@ -101,7 +111,7 @@ func main() {
 
 	fmt.Println("\n=== SSTABLE TEST ===")
 
-	name := generateName(DataComponent, SSTExtension)
+	name := storage_engine.GenerateName(storage_engine.DataComponent, storage_engine.SSTExtension, s.SSTablesDir )
 	fmt.Println("Next SSTable:", name)
 
 	fmt.Println("Current MemTable size:", s.MemTable.Size)
