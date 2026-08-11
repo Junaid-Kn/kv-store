@@ -72,7 +72,7 @@ func main() {
 
 				// Currently hardcoded for 2, later will implement
 				// for multiple commands at once.
-				if len(parts) != 2 {
+				if len(parts) > 3 {
 					log.Printf("Command not registered: %s", input)
 					continue
 				}
@@ -80,19 +80,33 @@ func main() {
 				operation := parts[0]
 
 				switch operation {
-				case "GET":
-					key := []byte(parts[1])
+					case "GET":
+						key := []byte(parts[1])
 
-					value, err := s.Read(key)
-					if err != nil {
-						c.Write([]byte("Error: " + err.Error() + "\n"))
-						continue
+						value, err := s.Read(key)
+						if err != nil {
+							c.Write([]byte("Error: " + err.Error() + "\n"))
+							continue
+						}
+
+						c.Write([]byte(value + "\n"))
+
+
+					case "PUT":
+						key := []byte(parts[1])
+						value := []byte(parts[2])
+
+						err := s.Put(key, value)
+						if err != nil {
+							c.Write([]byte("Error: " + err.Error() + "\n"))
+							continue
+						}
+						
+
 					}
 
-   					c.Write([]byte(value + "\n"))
-				}
-
-				log.Printf("Received: %s", input)
+					log.Printf("Received: %s", input)
+					
 
 			}
 
