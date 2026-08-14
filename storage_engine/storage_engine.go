@@ -26,6 +26,7 @@ const (
 const (
 	SSTExtension SSTableExtension = "sst"
 	IndexExtension SSTableExtension = "idx"
+	MetaExtension SSTableExtension = "meta"
 )
 
 const MAX_SIZE_BEFORE_FLUSH = 32*1024
@@ -52,6 +53,7 @@ type KVStorage struct {
 	WALDir string
 	SSTablesDir string
 	DataDir string
+	BloomFilter *BloomFilter
 }
 
 
@@ -230,7 +232,8 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 	go func() {
 		SSTFileName := GenerateName(DataComponent, SSTExtension, s.SSTablesDir)
 		IndexFileName := GenerateName(IndexComponent, IndexExtension, s.SSTablesDir)
-		
+		MetaFileName := GenerateName(MetaComponent, MetaExtension, s.SSTablesDir)
+
 		f, err := os.OpenFile(
 			SSTFileName,
 			os.O_APPEND|os.O_CREATE|os.O_RDWR,
@@ -242,26 +245,44 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 		}
 		defer f.Close()
 
-
 		idxFile, err := os.OpenFile(
 			IndexFileName,
 			os.O_APPEND|os.O_CREATE|os.O_RDWR,
 			0644,
 		)
 		if err != nil {
-			fmt.Println("failed to open index file :", err)
+			fmt.Println("failed to open index file:", err)
 			return
 		}
-
 		defer idxFile.Close()
 
+		metaFile, err := os.OpenFile(
+			MetaFileName,
+			os.O_APPEND|os.O_CREATE|os.O_RDWR,
+			0644,
+		)
+		if err != nil {
+			fmt.Println("failed to open meta file:", err)
+			return
+		}
+		defer metaFile.Close()
+
+		// Find the bottom level of the skip list.
 		curr := oldMemTable.HeadNode
 
 		for curr.DownNode != nil {
 			curr = curr.DownNode
 		}
 
+		// Skip the head/sentinel node.
 		curr = curr.NextNode
+
+		// create a new bloom filter for this table
+		bloomFilter := NewBloomFilter(
+			uint64(oldMemTable.Size),
+			0.01, // 1% false-positive probability
+		)
+
 		currSize := 0
 		nextOffsetInterval := OFFSET_INTERVAL
 
@@ -269,7 +290,16 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 
 			key := curr.Record.Key
 			value := curr.Record.Value
+
+			// Add the key to this SSTable's Bloom filter.
+			bloomFilter.Add(key)
+
 			recordOffset := currSize
+
+			// -----------------------------------------------------
+			// Write key length
+			// -----------------------------------------------------
+
 			err := binary.Write(
 				f,
 				binary.LittleEndian,
@@ -280,11 +310,19 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 				return
 			}
 
+			// -----------------------------------------------------
+			// Write key
+			// -----------------------------------------------------
+
 			_, err = f.Write(key)
 			if err != nil {
 				fmt.Println("failed to write key:", err)
 				return
 			}
+
+			// -----------------------------------------------------
+			// Write value length
+			// -----------------------------------------------------
 
 			err = binary.Write(
 				f,
@@ -296,6 +334,10 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 				return
 			}
 
+			// -----------------------------------------------------
+			// Write value
+			// -----------------------------------------------------
+
 			_, err = f.Write(value)
 			if err != nil {
 				fmt.Println("failed to write value:", err)
@@ -303,17 +345,20 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 			}
 
 			currSize += 4 + len(key) + 4 + len(value)
-			if currSize >= OFFSET_INTERVAL{
-				idx := IndexEntry { 
-					Key: append([]byte(nil), key...),
+
+			// -----------------------------------------------------
+			// Write sparse index entry
+			// -----------------------------------------------------
+
+			if currSize >= nextOffsetInterval {
+
+				idx := IndexEntry{
+					Key:        append([]byte(nil), key...),
 					ByteOffset: uint64(recordOffset),
 				}
-				// s.SSTableIndex = append(s.SSTableIndex, idx)
-				
-				nextOffsetInterval += OFFSET_INTERVAL
 
-				// write to the indxFile in the following format
-				// [KeyLen][Key][OffSet]
+				// [KeyLen][Key][Offset]
+
 				err := binary.Write(
 					idxFile,
 					binary.LittleEndian,
@@ -336,17 +381,35 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 					uint64(recordOffset),
 				)
 				if err != nil {
-					fmt.Println("failed to write key:", err)
+					fmt.Println("failed to write offset:", err)
 					return
 				}
-				
+
+				nextOffsetInterval += OFFSET_INTERVAL
 			}
 
 			curr = curr.NextNode
 		}
 
+		// ---------------------------------------------------------
+		// Serialize Bloom Filter
+		// ---------------------------------------------------------
+
+		bloomData := bloomFilter.Serialize()
+		if err != nil {
+			fmt.Println("failed to serialize bloom filter:", err)
+			return
+		}
+
+		_, err = metaFile.Write(bloomData)
+		if err != nil {
+			fmt.Println("failed to write bloom filter:", err)
+			return
+		}
+
 		fmt.Println("Finished flushing:", SSTFileName)
 		fmt.Println("Finished flushing:", IndexFileName)
+		fmt.Println("Finished flushing:", MetaFileName)
 	}()
 
 		return nil
@@ -361,10 +424,6 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 func ( s * KVStorage) Read(Key []byte) (string, error) { 
 	s.Mu.RLock()
 	defer s.Mu.RUnlock()
-	err := s.WriteRecord(3, Key, []byte(""));
-	if err != nil{
-		return "", err 
-	}
 	_, node := s.MemTable.Get(Key)
 	if node != nil  { 
 		return string(node.Record.Value), nil
@@ -382,7 +441,49 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 
 		for max > 0 {
 
-			// Reset index for this SSTable
+			// ---------------------------------------------------------
+			// Load Bloom Filter
+			// ---------------------------------------------------------
+
+			metaFileName := fmt.Sprintf(
+				"sstable-%d-%s.%s",
+				max,
+				MetaComponent,
+				MetaExtension,
+			)
+
+			metaPath := filepath.Join(
+				s.SSTablesDir,
+				metaFileName,
+			)
+
+			metaFile, err := os.Open(metaPath)
+			if err != nil {
+				return "", err
+			}
+
+			err = s.LoadBloomFilter(metaFile)
+			metaFile.Close()
+
+			if err != nil {
+				return "", err
+			}
+
+			// ---------------------------------------------------------
+			// Check Bloom Filter
+			// ---------------------------------------------------------
+
+			if !s.BloomFilter.MayContain(Key) {
+				// Key definitely does not exist in this SSTable.
+				// Skip the index and data file completely.
+				max--
+				continue
+			}
+
+			// ---------------------------------------------------------
+			// Load SSTable Index
+			// ---------------------------------------------------------
+
 			s.SSTableIndex = nil
 
 			idxFile := fmt.Sprintf(
@@ -392,19 +493,26 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 				IndexExtension,
 			)
 
-			idxPath := filepath.Join(s.SSTablesDir, idxFile)
+			idxPath := filepath.Join(
+				s.SSTablesDir,
+				idxFile,
+			)
 
 			indexFile, err := os.Open(idxPath)
 			if err != nil {
 				return "", err
 			}
-			// Load SSTable Index into memory
+
 			err = s.LoadSSTableIndex(indexFile)
 			indexFile.Close()
 
 			if err != nil {
 				return "", err
 			}
+
+			// ---------------------------------------------------------
+			// Search SSTable Index
+			// ---------------------------------------------------------
 
 			leftOffset, rightOffset, ok :=
 				s.SearchSSTableIndex(Key)
@@ -414,9 +522,9 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 				continue
 			}
 
-			// -------------------------
-			// Open data file
-			// -------------------------
+			// ---------------------------------------------------------
+			// Open Data File
+			// ---------------------------------------------------------
 
 			dataFileName := fmt.Sprintf(
 				"sstable-%d-%s.%s",
@@ -435,9 +543,9 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 				return "", err
 			}
 
-			// -------------------------
-			// Search data
-			// -------------------------
+			// ---------------------------------------------------------
+			// Search Data File
+			// ---------------------------------------------------------
 
 			value, found, err := searchDataFile(
 				dataFile,
@@ -457,7 +565,7 @@ func ( s * KVStorage) Read(Key []byte) (string, error) {
 			}
 
 			// Not in this SSTable.
-			// Try older one.
+			// Try older SSTable.
 			max--
 		}
 
@@ -646,6 +754,23 @@ func (s *KVStorage) LoadSSTableIndex(file *os.File) error {
 
         s.SSTableIndex = append(s.SSTableIndex, indexEntry)
     }
+}
+
+func (s *KVStorage) LoadBloomFilter(metaFile *os.File) error {
+	data, err := io.ReadAll(metaFile)
+	if err != nil {
+		return err
+	}
+
+	bloomFilter := DeserializeBloomFilter(data)
+
+	if bloomFilter == nil {
+		return errors.New("failed to deserialize bloom filter")
+	}
+
+	s.BloomFilter = bloomFilter
+
+	return nil
 }
 
 // func (s *KVStorage) LoadSSTableIndex(file *os.File) error {

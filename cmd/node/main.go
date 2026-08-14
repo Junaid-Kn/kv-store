@@ -76,7 +76,6 @@ func main() {
 					log.Printf("Command not registered: %s", input)
 					continue
 				}
-
 				operation := parts[0]
 
 				switch operation {
@@ -101,15 +100,10 @@ func main() {
 							c.Write([]byte("Error: " + err.Error() + "\n"))
 							continue
 						}
-						
-
 					}
-
 					log.Printf("Received: %s", input)
 					
-
 			}
-
 			if err := scanner.Err(); err != nil {
 				log.Printf("Connection error: %s", err)
 			}
