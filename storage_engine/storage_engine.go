@@ -54,6 +54,7 @@ type KVStorage struct {
 	SSTablesDir string
 	DataDir string
 	BloomFilter *BloomFilter
+	SequenceNum uint64
 }
 
 
@@ -203,12 +204,19 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 	s.Mu.Lock()
 	var err error
 	// write to memtable
-	_, node := s.MemTable.Get(Key)
-	  if node != nil {
+
+	record := s.MemTable.GetRecord(Key)
+	if record != nil {
         err = s.MemTable.Update(Key, Value)
     } else {
-
-        err = s.MemTable.Insert(Key, Value)
+			// Create one record for the entire tower
+		s.SequenceNum ++
+		record := &Entry{
+			Key:   append([]byte(nil), Key...),
+			Value: append([]byte(nil), Value...),
+			SequenceNum: s.SequenceNum,
+		}
+        err = s.MemTable.Insert(record)
     }
 
 
@@ -424,9 +432,9 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 func ( s * KVStorage) Read(Key []byte) (string, error) { 
 	s.Mu.RLock()
 	defer s.Mu.RUnlock()
-	_, node := s.MemTable.Get(Key)
-	if node != nil  { 
-		return string(node.Record.Value), nil
+	record := s.MemTable.GetRecord(Key)
+	if record != nil  { 
+		return string(record.Value), nil
 	}else{
 		// read from disk
 		// Load SSTableIndex here first
@@ -772,48 +780,3 @@ func (s *KVStorage) LoadBloomFilter(metaFile *os.File) error {
 
 	return nil
 }
-
-// func (s *KVStorage) LoadSSTableIndex(file *os.File) error {
-// 	for {
-// 		var keyLen uint32
-// 		var offset uint64
-
-// 		err := binary.Read(file, binary.LittleEndian, &keyLen)
-
-// 		if err == io.EOF {
-// 			return nil
-// 		}
-
-// 		if err != nil {
-// 			fmt.Println("ERROR READING KEY LENGTH:", err)
-// 			return err
-// 		}
-
-// 		fmt.Println("keyLen:", keyLen)
-
-// 		key := make([]byte, keyLen)
-
-// 		_, err = io.ReadFull(file, key)
-// 		if err != nil {
-// 			fmt.Println("ERROR READING KEY:", err)
-// 			return err
-// 		}
-
-// 		fmt.Println("key:", string(key))
-
-// 		err = binary.Read(file, binary.LittleEndian, &offset)
-// 		if err != nil {
-// 			fmt.Println("ERROR READING OFFSET:", err)
-// 			return err
-// 		}
-
-// 		fmt.Println("offset:", offset)
-
-// 		indexEntry := IndexEntry{
-// 			Key:        key,
-// 			ByteOffset: offset,
-// 		}
-
-// 		s.SSTableIndex = append(s.SSTableIndex, indexEntry)
-// 	}
-// }

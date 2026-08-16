@@ -17,6 +17,7 @@ type SkipList struct {
 type Entry struct {
 	Key   []byte
 	Value []byte
+	SequenceNum uint64
 }
 
 type SkipListNode struct {
@@ -57,29 +58,31 @@ func (sl *SkipList) Get(Key []byte) ([]*SkipListNode, *SkipListNode) {
 	return update, nil
 }
 
-func (sl *SkipList) Insert(Key, Value []byte) error {
+func (sl *SkipList) GetRecord(Key[]byte) *Entry { 
+	_, node := sl.Get(Key)
+	if node != nil { 
+		return node.Record
+	}
+	return nil
+}
 
-	updateList, keyNode := sl.Get(Key)
+func (sl *SkipList) Insert(Record *Entry) error {
+
+	updateList, keyNode := sl.Get(Record.Key)
 
 	if keyNode != nil {
 		fmt.Println("Key exists, abort")
 		return nil
 	}
 
-	// Create one record for the entire tower
-	record := &Entry{
-		Key:   append([]byte(nil), Key...),
-		Value: append([]byte(nil), Value...),
-	}
-
 	// Add the actual key/value data to the MemTable size.
-	sl.Size += uint64(len(record.Key))
-	sl.Size += uint64(len(record.Value))
+	sl.Size += uint64(len(Record.Key))
+	sl.Size += uint64(len(Record.Value))
 
 	// Create bottom level node
 	skipListNode := new(SkipListNode)
 
-	skipListNode.Record = record
+	skipListNode.Record = Record
 	skipListNode.Level = 0
 
 	skipListNode.NextNode = updateList[0].NextNode
@@ -93,7 +96,7 @@ func (sl *SkipList) Insert(Key, Value []byte) error {
 		newSkipListNode := new(SkipListNode)
 
 		// Same record as the node below
-		newSkipListNode.Record = record
+		newSkipListNode.Record = Record
 		newSkipListNode.Level = idx
 
 		newSkipListNode.NextNode = updateList[idx].NextNode

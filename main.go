@@ -126,8 +126,7 @@ func main() {
 
 
 // Things to do:
-// 1. Create the index for the SSTables
-// 2. Durability for Memtables incase of crash 
-// (create seperate log that appends every write that goes into MemTable)
-// 3. Bloom Filter implementation for fast Lookup
-// 4. Periodically merge the SSTable segments into 1 file and then delete the useless ones. 
+// 1. Wrote the sequenceNum to the kv_storage_engine and also each entry,
+// 	 need to also write to disk when it is being offloaded
+// 2. Need to add Tombstones as well to each Entry
+// 3. Need to also add compaction once the above 2 are implemented
