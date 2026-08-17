@@ -153,7 +153,7 @@ func (s * KVStorage) WriteToMTL(Key, Value[]byte) error {
 
 
 func (s * KVStorage) WriteToWAL(Op uint8, Key, Value[]byte) error { 
-	f, err := OpenOrCreateFile("WAL.bin")
+	f, err := OpenOrCreateFile(s.WALDir)
 	if err != nil { 
 		return err
 	}
@@ -174,6 +174,7 @@ func (s * KVStorage) WriteToWAL(Op uint8, Key, Value[]byte) error {
 		KeyLen: uint16(len(Key)),
 		Value: Value,
 		ValueLen: uint32(len(Value)),
+		SequenceNum: uint64(s.SequenceNum),
 		CheckSum:0, // do checksum calc later
 	}
 
@@ -190,6 +191,8 @@ func (s * KVStorage) WriteToWAL(Op uint8, Key, Value[]byte) error {
 	binary.Write(f, binary.LittleEndian, WALRecord.ValueLen)
 
 	f.Write(WALRecord.Value)
+
+	binary.Write(f, binary.LittleEndian, WALRecord.SequenceNum)
 
 	binary.Write(f, binary.LittleEndian, WALRecord.CheckSum)
 
@@ -352,7 +355,21 @@ func (s * KVStorage) Put(Key,Value []byte) error {
 				return
 			}
 
-			currSize += 4 + len(key) + 4 + len(value)
+			// -----------------------------------------------------
+			// Write Sequence Number
+			// -----------------------------------------------------
+
+			err = binary.Write(
+				f,
+				binary.LittleEndian,
+				uint64(curr.Record.SequenceNum),
+			)
+			if err != nil {
+				fmt.Println("failed to write SequenceNum to disk", err)
+				return
+			}
+			// 4(keylen) + key_len + 4(val_len) + val_len + seq_num_bytes
+			currSize += 4 + len(key) + 4 + len(value) + 8
 
 			// -----------------------------------------------------
 			// Write sparse index entry
@@ -780,3 +797,4 @@ func (s *KVStorage) LoadBloomFilter(metaFile *os.File) error {
 
 	return nil
 }
+

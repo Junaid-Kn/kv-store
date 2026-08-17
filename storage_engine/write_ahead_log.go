@@ -16,6 +16,7 @@ type WALInput struct{
 	KeyLen uint16
 	Value []byte
 	ValueLen uint32
+    SequenceNum uint64
 	CheckSum uint32
 }
 
@@ -111,6 +112,7 @@ func RecoverFromWAL(file string) (int, WALInput) {
         var op uint8
         var keyLen uint16
         var valueLen uint32
+        var sequenceNum uint64
         var checksum uint32
 
         // Transaction ID
@@ -150,6 +152,11 @@ func RecoverFromWAL(file string) (int, WALInput) {
         if err != nil {
             break
         }
+        // sequence Number
+        err = binary.Read(f, binary.LittleEndian, &sequenceNum)
+        if err != nil {
+            break
+        }
 
         // Checksum
         err = binary.Read(f, binary.LittleEndian, &checksum)
@@ -164,6 +171,7 @@ func RecoverFromWAL(file string) (int, WALInput) {
             KeyLen:        keyLen,
             Value:         value,
             ValueLen:      valueLen,
+            SequenceNum:   sequenceNum, 
             CheckSum:      checksum,
         }
 

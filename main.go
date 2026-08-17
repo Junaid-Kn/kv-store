@@ -127,6 +127,6 @@ func main() {
 
 // Things to do:
 // 1. Wrote the sequenceNum to the kv_storage_engine and also each entry,
-// 	 need to also write to disk when it is being offloaded
+// 	 wrote sequence number to sstables as well as to WAL
 // 2. Need to add Tombstones as well to each Entry
 // 3. Need to also add compaction once the above 2 are implemented
