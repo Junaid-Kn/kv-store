@@ -10,9 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 type SSTableComponent string
@@ -70,6 +69,11 @@ type KVStorage struct {
 	DataDir      string
 	BloomFilter  *BloomFilter
 	SequenceNum  uint64
+
+	fileMu     sync.Mutex
+	liveTables []SSTableID
+	nextGen    int
+	compacting atomic.Bool
 }
 
 func NewKVStorage(dataDir string) (*KVStorage, error) {
@@ -90,6 +94,10 @@ func NewKVStorage(dataDir string) (*KVStorage, error) {
 	}
 
 	if err := os.MkdirAll(s.SSTablesDir, 0755); err != nil {
+		return nil, err
+	}
+
+	if err := s.recoverLiveTables(); err != nil {
 		return nil, err
 	}
 
@@ -290,216 +298,61 @@ func (s *KVStorage) commitWrite() {
 }
 
 func (s *KVStorage) flushMemTable(oldMemTable *SkipList) {
-	entries, err := os.ReadDir(s.SSTablesDir)
+	id := SSTableID{
+		Gen:   s.allocateGen(),
+		Level: LevelL0,
+	}
+
+	estimatedKeys := oldMemTable.Size
+	if estimatedKeys == 0 {
+		estimatedKeys = 1
+	}
+
+	writer, err := newSSTWriter(s.SSTablesDir, id, estimatedKeys)
 	if err != nil {
-		fmt.Println("failed to read SSTable directory:", err)
+		fmt.Println("failed to create SSTable writer:", err)
 		return
 	}
-	gen := getMaxGenNumber(entries) + 1
-	SSTFileName := filepath.Join(s.SSTablesDir, fmt.Sprintf("sstable-%d-%s.%s", gen, DataComponent, SSTExtension))
-	IndexFileName := filepath.Join(s.SSTablesDir, fmt.Sprintf("sstable-%d-%s.%s", gen, IndexComponent, IndexExtension))
-	MetaFileName := filepath.Join(s.SSTablesDir, fmt.Sprintf("sstable-%d-%s.%s", gen, MetaComponent, MetaExtension))
 
-	f, err := os.OpenFile(
-		SSTFileName,
-		os.O_APPEND|os.O_CREATE|os.O_RDWR,
-		0644,
-	)
-	if err != nil {
-		fmt.Println("failed to open SSTable:", err)
-		return
-	}
-	defer f.Close()
-
-	idxFile, err := os.OpenFile(
-		IndexFileName,
-		os.O_APPEND|os.O_CREATE|os.O_RDWR,
-		0644,
-	)
-	if err != nil {
-		fmt.Println("failed to open index file:", err)
-		return
-	}
-	defer idxFile.Close()
-
-	metaFile, err := os.OpenFile(
-		MetaFileName,
-		os.O_APPEND|os.O_CREATE|os.O_RDWR,
-		0644,
-	)
-	if err != nil {
-		fmt.Println("failed to open meta file:", err)
-		return
-	}
-	defer metaFile.Close()
-
-	// Find the bottom level of the skip list.
 	curr := oldMemTable.HeadNode
-
 	for curr.DownNode != nil {
 		curr = curr.DownNode
 	}
-
-	// Skip the head/sentinel node.
 	curr = curr.NextNode
 
-	// create a new bloom filter for this table
-	bloomFilter := NewBloomFilter(
-		uint64(oldMemTable.Size),
-		0.01, // 1% false-positive probability
-	)
-
-	currSize := 0
-	nextOffsetInterval := OFFSET_INTERVAL
-
 	for curr != nil {
-
-		key := curr.Record.Key
-		value := curr.Record.Value
-
-		// Add the key to this SSTable's Bloom filter.
-		bloomFilter.Add(key)
-
-		recordOffset := currSize
-
-		// -----------------------------------------------------
-		// Write key length
-		// -----------------------------------------------------
-
-		err := binary.Write(
-			f,
-			binary.LittleEndian,
-			uint32(len(key)),
-		)
-		if err != nil {
-			fmt.Println("failed to write key length:", err)
-			return
-		}
-
-		// -----------------------------------------------------
-		// Write key
-		// -----------------------------------------------------
-
-		_, err = f.Write(key)
-		if err != nil {
-			fmt.Println("failed to write key:", err)
-			return
-		}
-
-		// -----------------------------------------------------
-		// Write value length
-		// -----------------------------------------------------
-
-		err = binary.Write(
-			f,
-			binary.LittleEndian,
-			uint32(len(value)),
-		)
-		if err != nil {
-			fmt.Println("failed to write value length:", err)
-			return
-		}
-
-		// -----------------------------------------------------
-		// Write value
-		// -----------------------------------------------------
-
-		_, err = f.Write(value)
-		if err != nil {
-			fmt.Println("failed to write value:", err)
-			return
-		}
-
-		// -----------------------------------------------------
-		// Write Sequence Number
-		// -----------------------------------------------------
-
-		err = binary.Write(
-			f,
-			binary.LittleEndian,
-			uint64(curr.Record.SequenceNum),
-		)
-		if err != nil {
-			fmt.Println("failed to write SequenceNum to disk", err)
-			return
-		}
-
 		kind := KindPut
 		if curr.Record.Deleted {
 			kind = KindDelete
 		}
-		err = binary.Write(f, binary.LittleEndian, kind)
+		err := writer.write(sstRecord{
+			key:   curr.Record.Key,
+			value: curr.Record.Value,
+			seq:   curr.Record.SequenceNum,
+			kind:  kind,
+		})
 		if err != nil {
-			fmt.Println("failed to write record kind to disk", err)
+			fmt.Println("failed to write SSTable record:", err)
+			writer.abort()
 			return
 		}
-		// 4(keylen) + key_len + 4(val_len) + val_len + seq_num + kind
-		currSize += 4 + len(key) + 4 + len(value) + 8 + 1
-
-		// -----------------------------------------------------
-		// Write sparse index entry
-		// -----------------------------------------------------
-
-		if currSize >= nextOffsetInterval {
-
-			idx := IndexEntry{
-				Key:        append([]byte(nil), key...),
-				ByteOffset: uint64(recordOffset),
-			}
-
-			// [KeyLen][Key][Offset]
-
-			err := binary.Write(
-				idxFile,
-				binary.LittleEndian,
-				uint32(len(idx.Key)),
-			)
-			if err != nil {
-				fmt.Println("failed to write key length:", err)
-				return
-			}
-
-			_, err = idxFile.Write(idx.Key)
-			if err != nil {
-				fmt.Println("failed to write key:", err)
-				return
-			}
-
-			err = binary.Write(
-				idxFile,
-				binary.LittleEndian,
-				uint64(recordOffset),
-			)
-			if err != nil {
-				fmt.Println("failed to write offset:", err)
-				return
-			}
-
-			nextOffsetInterval += OFFSET_INTERVAL
-		}
-
 		curr = curr.NextNode
 	}
 
-	// ---------------------------------------------------------
-	// Serialize Bloom Filter
-	// ---------------------------------------------------------
-
-	bloomData := bloomFilter.Serialize()
-	if err != nil {
-		fmt.Println("failed to serialize bloom filter:", err)
+	if err := writer.finish(); err != nil {
+		fmt.Println("failed to finish SSTable:", err)
+		writer.abort()
 		return
 	}
 
-	_, err = metaFile.Write(bloomData)
-	if err != nil {
-		fmt.Println("failed to write bloom filter:", err)
-		return
-	}
+	s.addLive(id)
 
-	fmt.Println("Finished flushing:", SSTFileName)
-	fmt.Println("Finished flushing:", IndexFileName)
-	fmt.Println("Finished flushing:", MetaFileName)
+	data, index, meta := s.tablePaths(id)
+	fmt.Println("Finished flushing:", data)
+	fmt.Println("Finished flushing:", index)
+	fmt.Println("Finished flushing:", meta)
+
+	s.maybeCompact()
 }
 
 func (s *KVStorage) Read(Key []byte) (string, error) {
@@ -511,125 +364,62 @@ func (s *KVStorage) Read(Key []byte) (string, error) {
 			return "", ErrNotFound
 		}
 		return string(record.Value), nil
-	} else {
-		// read from disk
-		// Load SSTableIndex here first
+	}
 
-		entries, err := os.ReadDir(s.SSTablesDir)
-		if err != nil {
-			fmt.Println(err)
-			return "", err
-		}
+	for attempt := 0; attempt < 2; attempt++ {
+		tables := s.snapshotLive()
+		sortForRead(tables)
+		restart := false
 
-		max := getMaxGenNumber(entries)
-
-		for max > 0 {
-
-			// ---------------------------------------------------------
-			// Load Bloom Filter
-			// ---------------------------------------------------------
-
-			metaFileName := fmt.Sprintf(
-				"sstable-%d-%s.%s",
-				max,
-				MetaComponent,
-				MetaExtension,
-			)
-
-			metaPath := filepath.Join(
-				s.SSTablesDir,
-				metaFileName,
-			)
+		for _, id := range tables {
+			dataPath, idxPath, metaPath := s.tablePaths(id)
 
 			metaFile, err := os.Open(metaPath)
 			if err != nil {
+				if os.IsNotExist(err) {
+					restart = true
+					break
+				}
 				return "", err
 			}
-
 			err = s.LoadBloomFilter(metaFile)
 			metaFile.Close()
-
 			if err != nil {
 				return "", err
 			}
-
-			// ---------------------------------------------------------
-			// Check Bloom Filter
-			// ---------------------------------------------------------
 
 			if !s.BloomFilter.MayContain(Key) {
-				// Key definitely does not exist in this SSTable.
-				// Skip the index and data file completely.
-				max--
 				continue
 			}
-
-			// ---------------------------------------------------------
-			// Load SSTable Index
-			// ---------------------------------------------------------
 
 			s.SSTableIndex = nil
-
-			idxFile := fmt.Sprintf(
-				"sstable-%d-%s.%s",
-				max,
-				IndexComponent,
-				IndexExtension,
-			)
-
-			idxPath := filepath.Join(
-				s.SSTablesDir,
-				idxFile,
-			)
-
 			indexFile, err := os.Open(idxPath)
 			if err != nil {
+				if os.IsNotExist(err) {
+					restart = true
+					break
+				}
 				return "", err
 			}
-
 			err = s.LoadSSTableIndex(indexFile)
 			indexFile.Close()
-
 			if err != nil {
 				return "", err
 			}
 
-			// ---------------------------------------------------------
-			// Search SSTable Index
-			// ---------------------------------------------------------
-
-			leftOffset, rightOffset, ok :=
-				s.SearchSSTableIndex(Key)
-
+			leftOffset, rightOffset, ok := s.SearchSSTableIndex(Key)
 			if !ok {
-				max--
 				continue
 			}
-
-			// ---------------------------------------------------------
-			// Open Data File
-			// ---------------------------------------------------------
-
-			dataFileName := fmt.Sprintf(
-				"sstable-%d-%s.%s",
-				max,
-				DataComponent,
-				SSTExtension,
-			)
-
-			dataPath := filepath.Join(
-				s.SSTablesDir,
-				dataFileName,
-			)
 
 			dataFile, err := os.Open(dataPath)
 			if err != nil {
+				if os.IsNotExist(err) {
+					restart = true
+					break
+				}
 				return "", err
 			}
-
-			// ---------------------------------------------------------
-			// Search Data File
-			// ---------------------------------------------------------
 
 			value, found, deleted, err := searchDataFile(
 				dataFile,
@@ -637,9 +427,7 @@ func (s *KVStorage) Read(Key []byte) (string, error) {
 				leftOffset,
 				rightOffset,
 			)
-
 			dataFile.Close()
-
 			if err != nil {
 				return "", err
 			}
@@ -650,19 +438,22 @@ func (s *KVStorage) Read(Key []byte) (string, error) {
 				}
 				return string(value), nil
 			}
-
-			// Not in this SSTable.
-			// Try older SSTable.
-			max--
 		}
 
+		if restart {
+			continue
+		}
 		return "", ErrNotFound
-
 	}
 
+	return "", ErrNotFound
 }
 
 func (s *KVStorage) SearchSSTableIndex(Key []byte) (uint64, uint64, bool) {
+	if len(s.SSTableIndex) == 0 {
+		return 0, 0, true
+	}
+
 	left := 0
 	right := len(s.SSTableIndex) - 1
 	candidate := -1
@@ -724,51 +515,19 @@ func searchDataFile(
 			return nil, false, false, nil
 		}
 
-		var keyLen uint32
-
-		err = binary.Read(file, binary.LittleEndian, &keyLen)
+		var rec sstRecord
+		rec, err = readSSTRecord(file)
 		if err == io.EOF {
 			return nil, false, false, nil
 		}
 		if err != nil {
 			return nil, false, false, err
 		}
-		currentKey := make([]byte, keyLen)
 
-		_, err = io.ReadFull(file, currentKey)
-		if err != nil {
-			return nil, false, false, err
-		}
-		var valueLen uint32
-
-		err = binary.Read(file, binary.LittleEndian, &valueLen)
-		if err != nil {
-			return nil, false, false, err
-		}
-
-		value := make([]byte, valueLen)
-
-		_, err = io.ReadFull(file, value)
-		if err != nil {
-			return nil, false, false, err
-		}
-
-		var sequenceNum uint64
-		err = binary.Read(file, binary.LittleEndian, &sequenceNum)
-		if err != nil {
-			return nil, false, false, err
-		}
-
-		var kind uint8
-		err = binary.Read(file, binary.LittleEndian, &kind)
-		if err != nil {
-			return nil, false, false, err
-		}
-
-		cmp := bytes.Compare(currentKey, key)
+		cmp := bytes.Compare(rec.key, key)
 
 		if cmp == 0 {
-			return value, true, kind == KindDelete, nil
+			return rec.value, true, rec.kind == KindDelete, nil
 		}
 
 		if cmp > 0 {
@@ -780,23 +539,15 @@ func searchDataFile(
 func getMaxGenNumber(entries []os.DirEntry) int {
 	max := 0
 	for _, entry := range entries {
-		name := entry.Name()
-		parts := strings.Split(name, "-")
-
-		if len(parts) == 3 {
-			genNum, err := strconv.Atoi(parts[1])
-			if err != nil {
-				fmt.Println(err)
-				return -1
-			}
-
-			if genNum > max {
-				max = genNum
-			}
+		gen, _, ok := parseSSTName(entry.Name())
+		if !ok {
+			continue
+		}
+		if gen > max {
+			max = gen
 		}
 	}
 	return max
-
 }
 
 func GenerateName(component SSTableComponent, extension SSTableExtension, dir string) string {
@@ -807,13 +558,10 @@ func GenerateName(component SSTableComponent, extension SSTableExtension, dir st
 	}
 
 	max := getMaxGenNumber(entries)
-	if max == -1 {
-		return ""
-	}
-
 	newName := fmt.Sprintf(
-		"sstable-%d-%s.%s",
+		"sstable-%d-%d-%s.%s",
 		max+1,
+		LevelL0,
 		component,
 		extension,
 	)
@@ -861,13 +609,11 @@ func (s *KVStorage) LoadBloomFilter(metaFile *os.File) error {
 		return err
 	}
 
-	bloomFilter := DeserializeBloomFilter(data)
-
+	_, bloomFilter, _ := parseMeta(data)
 	if bloomFilter == nil {
 		return errors.New("failed to deserialize bloom filter")
 	}
 
 	s.BloomFilter = bloomFilter
-
 	return nil
 }

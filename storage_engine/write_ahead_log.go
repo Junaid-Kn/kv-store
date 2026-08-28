@@ -1,49 +1,52 @@
 package storage_engine
+
 import (
 	// "bytes"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
-	"os"
-	"log"
 	"io"
+	"log"
+	"os"
 )
-var counter uint64 = 0  
-type WALInput struct{
+
+var counter uint64 = 0
+
+type WALInput struct {
 	TransactionId uint64
-	Op uint8
-	Key []byte
-	KeyLen uint16
-	Value []byte
-	ValueLen uint32
-    SequenceNum uint64
-	CheckSum uint32
+	Op            uint8
+	Key           []byte
+	KeyLen        uint16
+	Value         []byte
+	ValueLen      uint32
+	SequenceNum   uint64
+	CheckSum      uint32
 }
 
 func OpenOrCreateFile(file string) (*os.File, error) {
 	// If the file doesn't exist, create it, or append to the file
-    f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
-    if err != nil {
-        return nil, err
-    }
-    return f, nil 
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
 }
 
 func SaveCounter(id int64) error {
 	f, err := os.Create("counter.bin")
-	if err !=nil{
+	if err != nil {
 		log.Fatal("couldn't open the file")
 		return err
 	}
-	return binary.Write(f, binary.LittleEndian, id);
-	
+	return binary.Write(f, binary.LittleEndian, id)
+
 }
 
 func LoadCounter(file string) (int64, error) {
 	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
-    if err != nil {
-        return -1, err
-    }
+	if err != nil {
+		return -1, err
+	}
 	defer f.Close()
 	TId := make([]byte, 8)
 	_, err = f.Read(TId)
@@ -57,31 +60,31 @@ func LoadCounter(file string) (int64, error) {
 func WriteToWAL(Key []byte, Value []byte) error {
 
 	f, err := OpenOrCreateFile("WAL.bin")
-	if err != nil { 
+	if err != nil {
 		return err
 	}
 	defer f.Close()
 
 	curr_counter, err := LoadCounter("counter.bin")
-	if err != nil { 
+	if err != nil {
 		fmt.Println(err)
-		// create the first counter in the file 
+		// create the first counter in the file
 		SaveCounter(0)
 	}
 	curr_counter += 1
-	WALRecord := WALInput { 
+	WALRecord := WALInput{
 		TransactionId: uint64(curr_counter),
-		Op: 1, // INSERT,PUT,DELETE
-		Key: Key,
-		KeyLen: uint16(len(Key)),
-		Value: Value,
-		ValueLen: uint32(len(Value)),
-		CheckSum:0, 
+		Op:            1, // INSERT,PUT,DELETE
+		Key:           Key,
+		KeyLen:        uint16(len(Key)),
+		Value:         Value,
+		ValueLen:      uint32(len(Value)),
+		CheckSum:      0,
 	}
 
 	data := []byte(fmt.Sprintf("%d%d%d", WALRecord.Key, WALRecord.Value, WALRecord.TransactionId))
 	WALRecord.CheckSum = crc32.ChecksumIEEE(data)
-	
+
 	// write to the file
 	binary.Write(f, binary.LittleEndian, WALRecord.TransactionId)
 	binary.Write(f, binary.LittleEndian, WALRecord.Op)
@@ -90,98 +93,96 @@ func WriteToWAL(Key []byte, Value []byte) error {
 	binary.Write(f, binary.LittleEndian, WALRecord.ValueLen)
 	binary.Write(f, binary.LittleEndian, WALRecord.Value)
 	binary.Write(f, binary.LittleEndian, WALRecord.CheckSum)
-	// write to the counter.bin file 
+	// write to the counter.bin file
 	SaveCounter(int64(WALRecord.TransactionId))
 
 	return nil
 }
 
-
 func RecoverFromWAL(file string) (int, WALInput) {
-    f, err := os.Open(file)
-    if err != nil {
-        log.Println("failed to open WAL:", err)
-        return 0, WALInput{}
-    }
-    defer f.Close()
+	f, err := os.Open(file)
+	if err != nil {
+		log.Println("failed to open WAL:", err)
+		return 0, WALInput{}
+	}
+	defer f.Close()
 
-    WALRecords := []WALInput{}
+	WALRecords := []WALInput{}
 
-    for {
-        var transactionID uint64
-        var op uint8
-        var keyLen uint16
-        var valueLen uint32
-        var sequenceNum uint64
-        var checksum uint32
+	for {
+		var transactionID uint64
+		var op uint8
+		var keyLen uint16
+		var valueLen uint32
+		var sequenceNum uint64
+		var checksum uint32
 
-        // Transaction ID
-        err = binary.Read(f, binary.LittleEndian, &transactionID)
-        if err != nil {
-            break
-        }
+		// Transaction ID
+		err = binary.Read(f, binary.LittleEndian, &transactionID)
+		if err != nil {
+			break
+		}
 
-        // Operation
-        err = binary.Read(f, binary.LittleEndian, &op)
-        if err != nil {
-            break
-        }
+		// Operation
+		err = binary.Read(f, binary.LittleEndian, &op)
+		if err != nil {
+			break
+		}
 
-        // Key length
-        err = binary.Read(f, binary.LittleEndian, &keyLen)
-        if err != nil {
-            break
-        }
+		// Key length
+		err = binary.Read(f, binary.LittleEndian, &keyLen)
+		if err != nil {
+			break
+		}
 
-        // Key
-        key := make([]byte, keyLen)
-        _, err = io.ReadFull(f, key)
-        if err != nil {
-            break
-        }
+		// Key
+		key := make([]byte, keyLen)
+		_, err = io.ReadFull(f, key)
+		if err != nil {
+			break
+		}
 
-        // Value length
-        err = binary.Read(f, binary.LittleEndian, &valueLen)
-        if err != nil {
-            break
-        }
+		// Value length
+		err = binary.Read(f, binary.LittleEndian, &valueLen)
+		if err != nil {
+			break
+		}
 
-        // Value
-        value := make([]byte, valueLen)
-        _, err = io.ReadFull(f, value)
-        if err != nil {
-            break
-        }
-        // sequence Number
-        err = binary.Read(f, binary.LittleEndian, &sequenceNum)
-        if err != nil {
-            break
-        }
+		// Value
+		value := make([]byte, valueLen)
+		_, err = io.ReadFull(f, value)
+		if err != nil {
+			break
+		}
+		// sequence Number
+		err = binary.Read(f, binary.LittleEndian, &sequenceNum)
+		if err != nil {
+			break
+		}
 
-        // Checksum
-        err = binary.Read(f, binary.LittleEndian, &checksum)
-        if err != nil {
-            break
-        }
+		// Checksum
+		err = binary.Read(f, binary.LittleEndian, &checksum)
+		if err != nil {
+			break
+		}
 
-        WALRecord := WALInput{
-            TransactionId: transactionID,
-            Op:            op,
-            Key:           key,
-            KeyLen:        keyLen,
-            Value:         value,
-            ValueLen:      valueLen,
-            SequenceNum:   sequenceNum, 
-            CheckSum:      checksum,
-        }
+		WALRecord := WALInput{
+			TransactionId: transactionID,
+			Op:            op,
+			Key:           key,
+			KeyLen:        keyLen,
+			Value:         value,
+			ValueLen:      valueLen,
+			SequenceNum:   sequenceNum,
+			CheckSum:      checksum,
+		}
 
-        WALRecords = append(WALRecords, WALRecord)
-    }
+		WALRecords = append(WALRecords, WALRecord)
+	}
 
-    if len(WALRecords) == 0 {
-        return 0, WALInput{}
-    }
+	if len(WALRecords) == 0 {
+		return 0, WALInput{}
+	}
 
-    return len(WALRecords), WALRecords[len(WALRecords)-1]
+	return len(WALRecords), WALRecords[len(WALRecords)-1]
 }
-

@@ -125,9 +125,81 @@ func main() {
 	mustPut("drop-me", "back")
 	expectValue("put after SSTable tombstone resurrects the key", "drop-me", "back")
 
+	fmt.Println("\n=== COMPACTION TESTS ===")
+
+	mustPut("compact-keep", "v1")
+	mustPut("compact-drop", "gone")
+	mustDelete("compact-drop")
+
+	for i := 0; i < storage_engine.COMPACTION_THRESHOLD; i++ {
+		fmt.Printf("flushing L0 table %d (L0 count=%d)...\n", i+1, s.L0Count())
+		fillUntilFlush(fmt.Sprintf("c%d", i))
+	}
+	time.Sleep(2 * time.Second)
+
+	l0 := s.L0Count()
+	total := s.SSTableCount()
+	fmt.Printf("After compaction: L0=%d total SSTables=%d\n", l0, total)
+	for _, t := range s.LiveSSTables() {
+		fmt.Printf("  live table gen=%d level=%d\n", t.Gen, t.Level)
+	}
+
+	if l0 >= storage_engine.COMPACTION_THRESHOLD {
+		fail("compaction reduces L0 below threshold", fmt.Sprintf("L0=%d", l0))
+	} else {
+		pass("compaction reduces L0 below threshold")
+	}
+
+	hasL1 := false
+	for _, t := range s.LiveSSTables() {
+		if t.Level == storage_engine.LevelL1 {
+			hasL1 = true
+			break
+		}
+	}
+	if !hasL1 && total > 0 {
+		fail("compaction produces an L1 table", "no L1 SSTable in live set")
+	} else if hasL1 {
+		pass("compaction produces an L1 table")
+	}
+
+	expectValue("key survives compaction", "compact-keep", "v1")
+	expectMissing("tombstone dropped and key stays deleted after compaction", "compact-drop")
+	expectValue("earlier live key still readable after compaction", "keep-me", "alive")
+	expectValue("resurrected key still readable after compaction", "drop-me", "back")
+
+	mustPut("compact-keep", "v2")
+	expectValue("overwrite after compaction is readable", "compact-keep", "v2")
+
+	fmt.Println("\n=== RESTART SEQUENCE TEST ===")
+	seqAtShutdown := s.SequenceNum
+
+	s2, err := storage_engine.NewKVStorage(dataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if s2.SequenceNum == 0 && s2.SSTableCount() > 0 {
+		fail("recovered SequenceNum from SSTables", "SequenceNum is 0 with live tables")
+	} else {
+		fmt.Printf("recovered SequenceNum=%d (process had %d)\n", s2.SequenceNum, seqAtShutdown)
+		pass("recovered SequenceNum from SSTables")
+	}
+
+	if err := s2.Delete([]byte("keep-me")); err != nil {
+		log.Fatalf("Delete keep-me on restart: %v", err)
+	}
+	got, err := s2.Read([]byte("keep-me"))
+	if err == nil {
+		fail("delete after restart hides SSTable key", fmt.Sprintf("Read(keep-me)=%q", got))
+	} else if !errors.Is(err, storage_engine.ErrNotFound) {
+		fail("delete after restart hides SSTable key", err.Error())
+	} else {
+		pass("delete after restart hides SSTable key")
+	}
+
 	fmt.Println()
 	if failed > 0 {
-		log.Fatalf("%d tombstone test(s) failed", failed)
+		log.Fatalf("%d test(s) failed", failed)
 	}
-	fmt.Println("All tombstone tests passed.")
+	fmt.Println("All tombstone and compaction tests passed.")
 }
