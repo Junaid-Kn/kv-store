@@ -6,18 +6,18 @@ import (
 	"math/rand/v2"
 )
 
-
 type SkipList struct {
-	HeadNode    *SkipListNode
-	MaxHeight   int
+	HeadNode     *SkipListNode
+	MaxHeight    int
 	CurrentLevel int // current highest level
-	Size uint64
+	Size         uint64
 }
 
 type Entry struct {
-	Key   []byte
-	Value []byte
+	Key         []byte
+	Value       []byte
 	SequenceNum uint64
+	Deleted     bool // tombstone: key is deleted as of SequenceNum
 }
 
 type SkipListNode struct {
@@ -58,9 +58,9 @@ func (sl *SkipList) Get(Key []byte) ([]*SkipListNode, *SkipListNode) {
 	return update, nil
 }
 
-func (sl *SkipList) GetRecord(Key[]byte) *Entry { 
+func (sl *SkipList) GetRecord(Key []byte) *Entry {
 	_, node := sl.Get(Key)
-	if node != nil { 
+	if node != nil {
 		return node.Record
 	}
 	return nil
@@ -117,7 +117,7 @@ func (sl *SkipList) Insert(Record *Entry) error {
 	return nil
 }
 
-func (sl *SkipList) Update(Key, Value []byte) error {
+func (sl *SkipList) Update(Key, Value []byte, sequenceNum uint64) error {
 
 	_, keyNode := sl.Get(Key)
 
@@ -135,6 +135,25 @@ func (sl *SkipList) Update(Key, Value []byte) error {
 	sl.Size += uint64(len(newValue))
 
 	keyNode.Record.Value = newValue
+	keyNode.Record.Deleted = false
+	keyNode.Record.SequenceNum = sequenceNum
+
+	return nil
+}
+
+// SetTombstone marks an existing memtable key as deleted.
+func (sl *SkipList) SetTombstone(Key []byte, sequenceNum uint64) error {
+
+	_, keyNode := sl.Get(Key)
+
+	if keyNode == nil {
+		return fmt.Errorf("key not found")
+	}
+
+	sl.Size -= uint64(len(keyNode.Record.Value))
+	keyNode.Record.Value = nil
+	keyNode.Record.Deleted = true
+	keyNode.Record.SequenceNum = sequenceNum
 
 	return nil
 }
@@ -145,11 +164,6 @@ func coinFlip() string {
 		return "Heads"
 	}
 	return "Tails"
-}
-
-func (sl *SkipList) Delete(Key []byte) error {
-
-	return nil
 }
 
 func NewSkipList(maxHeight int) *SkipList {

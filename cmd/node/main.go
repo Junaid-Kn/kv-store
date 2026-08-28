@@ -2,12 +2,12 @@ package main
 
 import (
 	"bufio"
+	"github.com/Junaid-Kn/kv-store/storage_engine"
 	"log"
 	"net"
 	"os"
-	"strings"
 	"path/filepath"
-	"github.com/Junaid-Kn/kv-store/storage_engine"
+	"strings"
 )
 
 const PORT = 9000
@@ -24,7 +24,7 @@ func main() {
 	}
 	// Create a KVStorage using the directory provided by the user.
 	s, err := storage_engine.NewKVStorage(dataDir)
-	if err != nil{
+	if err != nil {
 		log.Fatal(err)
 	}
 	value, err := s.Read([]byte("key-00001"))
@@ -79,30 +79,40 @@ func main() {
 				operation := parts[0]
 
 				switch operation {
-					case "GET":
-						key := []byte(parts[1])
+				case "GET":
+					key := []byte(parts[1])
 
-						value, err := s.Read(key)
-						if err != nil {
-							c.Write([]byte("Error: " + err.Error() + "\n"))
-							continue
-						}
-
-						c.Write([]byte(value + "\n"))
-
-
-					case "PUT":
-						key := []byte(parts[1])
-						value := []byte(parts[2])
-
-						err := s.Put(key, value)
-						if err != nil {
-							c.Write([]byte("Error: " + err.Error() + "\n"))
-							continue
-						}
+					value, err := s.Read(key)
+					if err != nil {
+						c.Write([]byte("Error: " + err.Error() + "\n"))
+						continue
 					}
-					log.Printf("Received: %s", input)
-					
+
+					c.Write([]byte(value + "\n"))
+
+				case "PUT":
+					key := []byte(parts[1])
+					value := []byte(parts[2])
+
+					err := s.Put(key, value)
+					if err != nil {
+						c.Write([]byte("Error: " + err.Error() + "\n"))
+						continue
+					}
+
+				case "DELETE":
+					if len(parts) < 2 {
+						c.Write([]byte("Error: DELETE requires a key\n"))
+						continue
+					}
+					err := s.Delete([]byte(parts[1]))
+					if err != nil {
+						c.Write([]byte("Error: " + err.Error() + "\n"))
+						continue
+					}
+				}
+				log.Printf("Received: %s", input)
+
 			}
 			if err := scanner.Err(); err != nil {
 				log.Printf("Connection error: %s", err)
@@ -112,4 +122,3 @@ func main() {
 		}()
 	}
 }
-

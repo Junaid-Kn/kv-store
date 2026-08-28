@@ -1,16 +1,17 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"os"
-	"time"
-	"github.com/Junaid-Kn/kv-store/storage_engine"
 	"log"
+	"os"
 	"path/filepath"
+	"time"
+
+	"github.com/Junaid-Kn/kv-store/storage_engine"
 )
 
 func main() {
-
 	if len(os.Args) != 2 {
 		log.Fatalf("Usage: %s <data-directory>", os.Args[0])
 	}
@@ -18,115 +19,115 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// Create a KVStorage with an empty MemTable.
+
 	s, err := storage_engine.NewKVStorage(dataDir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	// Make sure the SSTable directory exists.
-	// err = os.MkdirAll(s.SSTablesDir, 0755)
-	// if err != nil {
-	// 	fmt.Println("Failed to create SSTable directory:", err)
-	// 	return
-	// }
 
-	fmt.Println("=== STRESS TEST: 10,000 KEYS ===")
+	failed := 0
+	pass := func(name string) {
+		fmt.Printf("PASS  %s\n", name)
+	}
+	fail := func(name string, detail string) {
+		failed++
+		fmt.Printf("FAIL  %s: %s\n", name, detail)
+	}
 
-	start := time.Now()
-
-	// Insert 10,000 keys.
-	for i := 0; i < 10000; i++ {
-
-		key := []byte(fmt.Sprintf("key-%05d", i))
-		value := []byte(fmt.Sprintf("value-%05d", i))
-
-		err := s.Put(key, value)
+	expectValue := func(name string, key, want string) {
+		got, err := s.Read([]byte(key))
 		if err != nil {
-			fmt.Printf("Put error at key %d: %v\n", i, err)
+			fail(name, fmt.Sprintf("Read(%q) error: %v", key, err))
 			return
 		}
-	}
-
-	elapsed := time.Since(start)
-
-	fmt.Printf("Inserted 10,000 keys in %v\n", elapsed)
-	fmt.Printf("Current MemTable size: %d\n", s.MemTable.Size)
-
-	// Give the background flush goroutine time to finish.
-	time.Sleep(2 * time.Second)
-
-	fmt.Println("\n=== READ TEST ===")
-
-	// Test several keys throughout the dataset.
-	testKeys := []int{
-		0,
-		1,
-		100,
-		1000,
-		5000,
-		9998,
-		9999,
-	}
-
-	for _, i := range testKeys {
-
-		key := []byte(fmt.Sprintf("key-%05d", i))
-
-		start := time.Now()
-
-		value, err := s.Read(key)
-
-		elapsed := time.Since(start)
-
-		if err != nil {
-			fmt.Printf(
-				"Read key-%05d ERROR: %v (%v)\n",
-				i,
-				err,
-				elapsed,
-			)
-			continue
+		if got != want {
+			fail(name, fmt.Sprintf("Read(%q) = %q, want %q", key, got, want))
+			return
 		}
-		fmt.Printf(
-			"key-%05d = %s (%v)\n",
-			i,
-			value,
-			elapsed,
-		)
+		pass(name)
 	}
 
-	fmt.Println("\n=== MISSING KEY TEST ===")
+	expectMissing := func(name string, key string) {
+		got, err := s.Read([]byte(key))
+		if err == nil {
+			fail(name, fmt.Sprintf("Read(%q) = %q, want ErrNotFound", key, got))
+			return
+		}
+		if !errors.Is(err, storage_engine.ErrNotFound) {
+			fail(name, fmt.Sprintf("Read(%q) error = %v, want ErrNotFound", key, err))
+			return
+		}
+		pass(name)
+	}
 
-	start = time.Now()
+	mustPut := func(key, value string) {
+		if err := s.Put([]byte(key), []byte(value)); err != nil {
+			log.Fatalf("Put(%q, %q): %v", key, value, err)
+		}
+	}
 
-	_, err = s.Read([]byte("key-99999"))
+	mustDelete := func(key string) {
+		if err := s.Delete([]byte(key)); err != nil {
+			log.Fatalf("Delete(%q): %v", key, err)
+		}
+	}
 
-	elapsed = time.Since(start)
+	fillUntilFlush := func(prefix string) {
+		before := s.MemTable.Size
+		for i := 0; i < 3000; i++ {
+			mustPut(
+				fmt.Sprintf("%s-%05d", prefix, i),
+				fmt.Sprintf("value-%05d", i),
+			)
+			if s.MemTable.Size < before && s.MemTable.Size < storage_engine.MAX_SIZE_BEFORE_FLUSH {
+				break
+			}
+			before = s.MemTable.Size
+		}
+		time.Sleep(2 * time.Second)
+	}
 
-	fmt.Printf(
-		"Missing key result: %v (%v)\n",
-		err,
-		elapsed,
-	)
+	fmt.Println("=== TOMBSTONE TESTS ===")
 
-	fmt.Println("\n=== SSTABLE TEST ===")
+	mustPut("user", "alice")
+	expectValue("memtable put is readable", "user", "alice")
 
-	name := storage_engine.GenerateName(storage_engine.DataComponent, storage_engine.SSTExtension, s.SSTablesDir )
-	fmt.Println("Next SSTable:", name)
+	mustDelete("user")
+	expectMissing("memtable delete hides the key", "user")
 
-	fmt.Println("Current MemTable size:", s.MemTable.Size)
+	mustPut("user", "bob")
+	expectValue("put after delete resurrects the key", "user", "bob")
 
-	fmt.Println("\n=== STRESS TEST COMPLETE ===")
+	mustDelete("user")
+	expectMissing("second delete hides the key again", "user")
+
+	mustDelete("never-existed")
+	expectMissing("delete of missing key is still not found", "never-existed")
+
+	mustPut("keep-me", "alive")
+	mustPut("drop-me", "gone")
+	fmt.Println("flushing live values to SSTable...")
+	fillUntilFlush("sst1")
+
+	expectValue("flushed live key is readable from SSTable", "keep-me", "alive")
+	expectValue("flushed key still readable before delete", "drop-me", "gone")
+
+	mustDelete("drop-me")
+	expectMissing("memtable tombstone hides SSTable value", "drop-me")
+	expectValue("unrelated flushed key still readable", "keep-me", "alive")
+
+	fmt.Println("flushing tombstone to a newer SSTable...")
+	fillUntilFlush("sst2")
+
+	expectMissing("SSTable tombstone hides older SSTable value", "drop-me")
+	expectValue("unrelated key survives tombstone flush", "keep-me", "alive")
+
+	mustPut("drop-me", "back")
+	expectValue("put after SSTable tombstone resurrects the key", "drop-me", "back")
+
+	fmt.Println()
+	if failed > 0 {
+		log.Fatalf("%d tombstone test(s) failed", failed)
+	}
+	fmt.Println("All tombstone tests passed.")
 }
-
-
-// have sorted data blocks on disk
-
-// [keyLen][Key][ValLen][Value] [Index]
-
-
-// Things to do:
-// 1. Wrote the sequenceNum to the kv_storage_engine and also each entry,
-// 	 wrote sequence number to sstables as well as to WAL
-// 2. Need to add Tombstones as well to each Entry
-// 3. Need to also add compaction once the above 2 are implemented
